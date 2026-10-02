@@ -1,13 +1,12 @@
 # XYZ Bank Data Migration
 
-Migración de datos bancarios con **Spring Boot 3.5** y **Spring Batch 5**. Procesa los CSV de `data/semana_3` mediante tres jobs independientes (Reader → Processor → Writer), con persistencia JDBC en **MySQL**, skip/retry personalizados y process steps multithread.
+Migración de datos bancarios con **Spring Boot 3.5.3** y **Spring Batch 5**. Procesa por defecto los CSV de `data/legacy` mediante tres jobs independientes (lectura → procesador → escritura), con persistencia JDBC en **MySQL**, omisión y reintento personalizados, y pasos de proceso en varios hilos.
 
 Documentación ampliada:
 
 - **Plataforma completa (MySQL + PostgreSQL + config-server + eureka-server + core-service + interests-service + BFFs):** Compose en la raíz del repo — ver el [README raíz](../README.md). Ese es el camino soportado para levantar todo.
 - [docs/jobs.md](docs/jobs.md) — diagramas y flujo de cada job
 - [docs/mysql.md](docs/mysql.md) — Docker MySQL, conexión y consultas de reportes
-- [docs/entrega/](docs/entrega/) — documentos de entrega del grupo
 
 MySQL aislado para experimentar solo el job: [`docker-compose.yml`](docker-compose.yml) en este módulo (`data-migration/docker-compose.yml`).
 
@@ -15,8 +14,8 @@ MySQL aislado para experimentar solo el job: [`docker-compose.yml`](docker-compo
 
 | Tecnología | Uso |
 |---|---|
-| Java 17+ | Lenguaje |
-| Spring Boot 3.5 | Bootstrap |
+| Java 21 | Lenguaje (`maven.compiler.release` del POM padre; la imagen usa Temurin 21) |
+| Spring Boot 3.5.3 | Bootstrap |
 | Spring Batch 5 | Jobs, steps, skip/retry |
 | MySQL 8.4 | Datos de negocio + JobRepository Batch |
 | Docker Compose | MySQL local |
@@ -52,14 +51,18 @@ src/main/java/com/xyzbank/migration/
 
 Si el job ya tiene `SUCCESS` en `migration_executions`, se omite el process (`ALREADY_MIGRATED`). Cada lanzamiento usa `RunIdIncrementer` para crear una nueva instancia Batch y consultar el ledger. Detalle en [docs/jobs.md](docs/jobs.md).
 
+`migration.run-all` sale en `false` (`MIGRATION_RUN_ALL`). Con `true`, `RunAllMigrationsRunner` lanza en orden `dailyTransactionsJob`, `monthlyInterestsJob` y `annualGenerationJob`, y el proceso termina. El Compose de la raíz pone `MIGRATION_RUN_ALL=true`. Si un job termina `FAILED`, el runner lo reinicia una sola vez con `JobOperator.restart` de esa misma ejecución. Si el reinicio no queda `COMPLETED`, el proceso falla. Lanzar un job suelto con `spring.batch.job.name` no pasa por ese reinicio.
+
 ## Escalado y resiliencia
 
-| Parámetro | Default | Descripción |
+| Parámetro | En `application.yml` | Descripción |
 |---|---|---|
 | `migration.batch.chunk-size` | `5` | Tamaño de chunk |
-| `migration.batch.throttle-limit` | `3` | Hilos del `TaskExecutor` en el process step |
+| `migration.batch.throttle-limit` | `3` | `corePoolSize`, `maxPoolSize` y `queueCapacity` del `TaskExecutor` |
 | `migration.batch.skip-limit` | `2000` | Tope de skips de dominio/parse |
 | `migration.batch.retry-limit` | `3` | Reintentos JDBC transitorios |
+
+`src/test/resources/application.yml` baja `throttle-limit` a `1` y `skip-limit` a `100`. `TheRunAllMigrationsRunnerTest` vuelve a poner `skip-limit` en `2000`.
 
 Los process steps usan **multithreading** (`SynchronizedItemStreamReader` + `TaskExecutorRepeatTemplate`), `DomainSkipPolicy`, `TransientDataAccessRetryPolicy`, `ExponentialBackOffPolicy` (1s ×2 hasta 10s), `LoggingRetryListener` (log INFO con `attempt` y `thread` en cada reintento JDBC) y listeners de métricas (`Step metrics ... throughputPerSec`). No hay particionado: MT cubre el requisito de escalado paralelo.
 
@@ -78,7 +81,7 @@ También se omiten:
 - `monto` vacío o `<= 0`
 - `fecha` inválida
 - `id` vacío
-- duplicados por business key (`fecha|monto|tipo`) en el mismo run
+- duplicados en el mismo run. La clave es fecha ISO, monto y tipo de dominio (`DEBIT` o `CREDIT`)
 
 La anomalía de monto alto (`HIGH_AMOUNT`, monto > 2000) se registra en el reporte y el ítem se escribe. Los duplicados lanzan `DomainError` y se omiten (`skip`) mediante `DomainSkipPolicy`.
 
@@ -122,7 +125,7 @@ Antes de persistir, los tres jobs recortan espacios en campos de texto/fecha y f
 ## Requisitos previos
 
 Para poder ejecutar el proyecto necesitas tener instalado:
-- **JDK 17+** (configurado en el `PATH` o mediante `JAVA_HOME`).
+- **JDK 21** (configurado en el `PATH` o mediante `JAVA_HOME`).
 - **Docker** y **Docker Compose** (para levantar la base de datos MySQL local).
 
 *Nota: No es necesario tener Maven instalado de forma global, ya que el proyecto incluye **Maven Wrapper** (`mvnw` / `mvnw.cmd`).*
@@ -161,7 +164,7 @@ Conexión: `localhost:3306`, DB `xyz_bank_migration`, user/password `migration`/
 ./mvnw spring-boot:run -Dspring-boot.run.arguments="--spring.batch.job.enabled=true --spring.batch.job.name=annualGenerationJob"
 ```
 
-Por defecto `spring.batch.job.enabled=false`.
+Por defecto `spring.batch.job.enabled=false` y `migration.run-all=false`. Esas corridas lanzan un solo job y no reinician un `FAILED`. El reinicio único está en `RunAllMigrationsRunner`, cuando `MIGRATION_RUN_ALL=true`.
 
 ### 4. Demo de performance (CSV sintético + comparación)
 
@@ -173,7 +176,7 @@ python3 scripts/generate-performance-data.py
   -Dspring-boot.run.arguments="--spring.batch.job.enabled=true --spring.batch.job.name=dailyTransactionsJob --migration.batch.throttle-limit=1"
 ```
 
-Los CSV grandes viven en `data/performance/` (ignorados por git). En los logs buscá `Step metrics` y `Starting job=... chunkSize=... throttleLimit=...`. Detalle y tabla de comparación: [docs/jobs.md](docs/jobs.md#comparación-de-parámetros-configuración-óptima-local).
+Los CSV grandes viven en `data/performance/`. En los logs buscá `Step metrics` y `Starting job=... chunkSize=... throttleLimit=...`. Detalle y tabla de comparación: [docs/jobs.md](docs/jobs.md#comparación-de-parámetros-configuración-óptima-local).
 
 ### 5. Ver reportes migrados
 
@@ -197,12 +200,12 @@ Luego vuelve a ejecutar el job deseado. El script limpia tablas de negocio, `mig
 
 ## Datos de entrada
 
-Default: **semana_3** (~1000 filas por CSV, con ruido intencional). También existen `data/semana_1`, `data/semana_2` y CSVs sintéticos en `data/performance/` (generados). Los tests unitarios de job siguen usando `semana_2`.
+El default de `application.yml` son los CSV oficiales de `data/legacy` (`file:data/legacy/...`). La imagen copia `data-migration/data` a `/app/data` y fija `MIGRATION_DAILY_TRANSACTIONS`, `MIGRATION_MONTHLY_INTERESTS` y `MIGRATION_ANNUAL_ACCOUNTS` a los mismos archivos bajo `file:/app/data/legacy/`.
 
 | Archivo | Job |
 |---|---|
-| [`data/semana_3/transacciones.csv`](data/semana_3/transacciones.csv) | dailyTransactionsJob |
-| [`data/semana_3/intereses.csv`](data/semana_3/intereses.csv) | monthlyInterestsJob |
-| [`data/semana_3/cuentas_anuales.csv`](data/semana_3/cuentas_anuales.csv) | annualGenerationJob |
+| [`data/legacy/movimientos_financieros_diarios.csv`](data/legacy/movimientos_financieros_diarios.csv) | dailyTransactionsJob |
+| [`data/legacy/intereses_trimestrales.csv`](data/legacy/intereses_trimestrales.csv) | monthlyInterestsJob |
+| [`data/legacy/estados_financieros_anuales.csv`](data/legacy/estados_financieros_anuales.csv) | annualGenerationJob |
 
-Fechas aceptadas: `yyyy-MM-dd`, `yyyy/MM/dd`, `dd-MM-yyyy`, `dd/MM/yyyy`. `skip-limit` por defecto es `2000` para absorber el ruido de semana_3.
+Fechas aceptadas: `yyyy-MM-dd`, `yyyy/MM/dd`, `dd-MM-yyyy`, `dd/MM/yyyy`. `skip-limit` por defecto es `2000`.

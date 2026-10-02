@@ -21,11 +21,12 @@ import java.util.concurrent.TimeUnit;
 
 @Component
 @ConditionalOnExpression(
-        "${interests.kafka.enabled:false} || ${app.events.transaction-confirmed.enabled:false}")
+        "${interests.kafka.enabled:false} || ${app.events.transaction-confirmed.enabled:false} || ${app.events.security-alerts.enabled:false}")
 public class OutboxEventRelay {
 
     private static final Logger log = LoggerFactory.getLogger(OutboxEventRelay.class);
     private static final String TRANSACTION_CONFIRMED = "TransactionConfirmed";
+    private static final String CARD_BLOCKED = "CardBlocked";
     private static final Set<String> INTEREST_CREDIT_RESULTS = Set.of(
             "InterestCreditApplied",
             "InterestCreditRejected",
@@ -36,18 +37,21 @@ public class OutboxEventRelay {
     private final ObjectMapper objectMapper;
     private final String creditResultsTopic;
     private final String transactionsConfirmedTopic;
+    private final String securityAlertsTopic;
 
     public OutboxEventRelay(
             JdbcTemplate jdbcTemplate,
             KafkaTemplate<String, String> kafkaTemplate,
             ObjectMapper objectMapper,
             @Value("${interests.kafka.credit-results-topic}") String creditResultsTopic,
-            @Value("${app.events.transaction-confirmed.topic}") String transactionsConfirmedTopic) {
+            @Value("${app.events.transaction-confirmed.topic}") String transactionsConfirmedTopic,
+            @Value("${app.events.security-alerts.topic}") String securityAlertsTopic) {
         this.jdbcTemplate = jdbcTemplate;
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.creditResultsTopic = creditResultsTopic;
         this.transactionsConfirmedTopic = transactionsConfirmedTopic;
+        this.securityAlertsTopic = securityAlertsTopic;
     }
 
     @Scheduled(fixedDelayString = "${app.outbox.relay-delay-ms:1000}")
@@ -62,7 +66,7 @@ public class OutboxEventRelay {
     private void publish(PendingOutboxEvent pending) {
         try {
             String payload = objectMapper.writeValueAsString(pending.message());
-            kafkaTemplate.send(pending.topic(), pending.accountId(), payload).get(5, TimeUnit.SECONDS);
+            kafkaTemplate.send(pending.topic(), pending.messageKey(), payload).get(5, TimeUnit.SECONDS);
             jdbcTemplate.update(
                     "UPDATE outbox_events SET published = TRUE WHERE id = ? AND published = FALSE",
                     pending.id());
@@ -79,7 +83,7 @@ public class OutboxEventRelay {
                 """
                 SELECT id, event_id, event_type, schema_version, account_id, period,
                        amount, currency, interest_rate, opening_balance, closing_balance,
-                       occurred_on, reason, movement_type
+                       occurred_on, reason, movement_type, card_id
                 FROM outbox_events
                 WHERE published = FALSE
                 ORDER BY occurred_on NULLS LAST, id
@@ -94,6 +98,24 @@ public class OutboxEventRelay {
         String eventId = row.getString("event_id");
         String accountId = row.getString("account_id");
         UUID id = row.getObject("id", UUID.class);
+        if (CARD_BLOCKED.equals(eventType)) {
+            String cardId = row.getString("card_id");
+            if (cardId == null) {
+                log.warn("Skipping CardBlocked outbox event {} because it has no card id", eventId);
+                return null;
+            }
+            return new PendingOutboxEvent(
+                    id,
+                    eventId,
+                    cardId,
+                    securityAlertsTopic,
+                    new SecurityAlertMessage(
+                            eventId,
+                            eventType,
+                            row.getInt("schema_version"),
+                            cardId,
+                            row.getObject("occurred_on", LocalDate.class)));
+        }
         if (TRANSACTION_CONFIRMED.equals(eventType)) {
             return new PendingOutboxEvent(
                     id,
@@ -146,7 +168,16 @@ public class OutboxEventRelay {
     }
 
     private record PendingOutboxEvent(
-            UUID id, String eventId, String accountId, String topic, Object message) {
+            UUID id, String eventId, String messageKey, String topic, Object message) {
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private record SecurityAlertMessage(
+            String eventId,
+            String eventType,
+            int schemaVersion,
+            String cardId,
+            LocalDate occurredAt) {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

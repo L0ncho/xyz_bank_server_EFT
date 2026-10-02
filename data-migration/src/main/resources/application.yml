@@ -18,9 +18,9 @@ spring:
 migration:
   run-all: ${MIGRATION_RUN_ALL:false}
   data:
-    daily-transactions: ${MIGRATION_DAILY_TRANSACTIONS:file:data/semana_3/transacciones.csv}
-    monthly-interests: ${MIGRATION_MONTHLY_INTERESTS:file:data/semana_3/intereses.csv}
-    annual-accounts: ${MIGRATION_ANNUAL_ACCOUNTS:file:data/semana_3/cuentas_anuales.csv}
+    daily-transactions: ${MIGRATION_DAILY_TRANSACTIONS:file:data/legacy/movimientos_financieros_diarios.csv}
+    monthly-interests: ${MIGRATION_MONTHLY_INTERESTS:file:data/legacy/intereses_trimestrales.csv}
+    annual-accounts: ${MIGRATION_ANNUAL_ACCOUNTS:file:data/legacy/estados_financieros_anuales.csv}
   batch:
     chunk-size: 5
     throttle-limit: 3

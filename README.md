@@ -1,5 +1,7 @@
 # XYZ Bank Server
 
+Repositorio: https://github.com/L0ncho/xyz_bank_server_EFT
+
 Plataforma BFF de XYZ Bank: tres backends por canal (`bff-web`, `bff-mobile`, `bff-atm`) frente a un `core-service` interno y un `interests-service` extraído (con `config-server` y `eureka-server`), más un job de migración CSV hacia MySQL.
 
 **Autenticación y HTTPS están implementadas con configuración de desarrollo.** Cada canal se autentica con una credencial real — cookie de sesión (web), JWT de dispositivo (mobile), o certificado mTLS del terminal más un PIN de tarjeta (ATM) — pero todo el material de confianza es de dev/test: un proveedor OIDC simulado (mock, ver `platform/*/src/test/.../MockOidcProvider`), un secreto de firma de sesión fijo, credenciales de servicio por BFF fijas, y una CA de desarrollo autofirmada (`scripts/generate-dev-tls-certs.sh`). Antes de un despliegue real hace falta: un IdP externo real, una CA gestionada que emita certificados reales, y credenciales de servicio rotadas por BFF.
@@ -16,6 +18,8 @@ El login de `bff-web`/`bff-mobile` pasa por ese proveedor OIDC simulado, que sol
 
 Cada canal prueba la identidad del llamante con una credencial real en vez de una cabecera de confianza: cookie de sesión OAuth2/OIDC para web, JWT de dispositivo para mobile, y mTLS más una sesión verificada por PIN para ATM. Todo borde de cara al cliente es TLS; el borde BFF→plataforma sigue siendo HTTP plano salvo la única llamada que transporta un PIN, que es TLS-only por diseño. `bff-web` enruta el resumen de intereses a `interests-service` (flag `FEATURE_USE_INTERESTS_SERVICE`, default `true`). El GET de resumen sigue siendo síncrono: `interests-service` reenvía el Bearer del usuario a `core-service`. La acreditación anual, con `FEATURE_INTEREST_CREDIT_VIA_KAFKA` en `false` (default), sigue siendo el POST HTTP con scope `interests:write`. Con la flag en `true`, `interests-service` publica `InterestCalculated` y `core-service` responde por `interests.credit-results` (saga coreografiada; ver [`docs/adr/002-event-architecture.md`](docs/adr/002-event-architecture.md)).
 
+El `gateway` escucha en el puerto 8090 y enruta `/web`, `/mobile` y `/atm`. Con `EUREKA_CLIENT_ENABLED=true` los tres BFF llaman a `http://core-service` y `register-with-eureka` es `false`. Sin esa variable mantienen `http://localhost:8080`. `core-service` también abre, cierra y mantiene cuentas, acepta depósitos, transferencias y pagos externos, y actualiza el perfil del cliente. El PIN sigue en el conector TLS 8453.
+
 ```mermaid
 flowchart LR
   subgraph clients [Clients]
@@ -23,6 +27,8 @@ flowchart LR
     MobileClient[Mobile client]
     AtmClient[ATM client]
   end
+
+  Gateway[gateway :8090]
 
   subgraph bffs [BFFs - channel auth]
     BffWeb[bff-web :8081 OAuth2/OIDC session cookie]
@@ -43,6 +49,12 @@ flowchart LR
   MySQL[(MySQL 8.4)]
   Migration[data-migration one-shot]
 
+  WebClient -- HTTPS --> Gateway
+  MobileClient -- HTTPS --> Gateway
+  AtmClient -- HTTPS --> Gateway
+  Gateway -- "/web" --> BffWeb
+  Gateway -- "/mobile" --> BffMobile
+  Gateway -- "/atm" --> BffAtm
   WebClient -- HTTPS --> BffWeb
   MobileClient -- HTTPS --> BffMobile
   AtmClient -- HTTPS + mTLS --> BffAtm
@@ -57,6 +69,7 @@ flowchart LR
   CoreService -- "InterestCreditApplied / Rejected" --> Kafka
   Kafka -- "credit result" --> InterestsService
   CoreService -- "TransactionConfirmed" --> Kafka
+  CoreService -- "security.alerts" --> Kafka
   BffAtm -- "retiro síncrono HTTP" --> CoreService
   InterestsService --> ConfigServer
   InterestsService --> EurekaServer
@@ -66,7 +79,7 @@ flowchart LR
   Migration --> MySQL
 ```
 
-`CoreServicePin` es un segundo conector Tomcat del mismo `core-service`, no un servicio aparte — comparte proceso y acceso a base de datos; se dibuja por separado solo para mostrar que ese conector exige TLS mientras el resto de `core-service` sigue en HTTP plano. `interests-service` toma configuración de `config-server` (repo nativo `config-repo/`), se registra en Eureka, descubre `core-service` por nombre de servicio (LoadBalancer), y aplica tolerancia a fallos con Resilience4j (circuit breaker) hacia core en las llamadas HTTP (resumen, saldo y, con la flag de Kafka apagada, el crédito). Kafka es un broker único en KRaft, sin ZooKeeper. Los tópicos `interests.calculated`, `interests.credit-results` y `transactions.confirmed` los crea `kafka-init` al arrancar. Cada movimiento de dinero confirmado en `core-service` (retiro ATM síncrono o crédito de interés) publica `TransactionConfirmed` vía outbox a `transactions.confirmed` (clave `accountId`). La flecha HTTP de intereses a core sigue siendo el camino del GET y del crédito síncrono. Detalle completo de cada credencial por canal en `docs/contracts/*/openapi.yaml` y en `docs/architecture.md`.
+`CoreServicePin` es un segundo conector Tomcat del mismo `core-service`, no un servicio aparte — comparte proceso y acceso a base de datos; se dibuja por separado solo para mostrar que ese conector exige TLS mientras el resto de `core-service` sigue en HTTP plano. `interests-service` toma configuración de `config-server` (repo nativo `config-repo/`), se registra en Eureka, descubre `core-service` por nombre de servicio (LoadBalancer), y aplica tolerancia a fallos con Resilience4j (circuit breaker) hacia core en las llamadas HTTP (resumen, saldo y, con la flag de Kafka apagada, el crédito). Kafka es un broker único en KRaft, sin ZooKeeper. Los tópicos `interests.calculated`, `interests.credit-results`, `transactions.confirmed` y `security.alerts` los crea `kafka-init` al arrancar. Cada movimiento de dinero confirmado en `core-service` (retiro ATM síncrono o crédito de interés) publica `TransactionConfirmed` vía outbox a `transactions.confirmed` (clave `accountId`). La flecha HTTP de intereses a core sigue siendo el camino del GET y del crédito síncrono. Detalle completo de cada credencial por canal en `docs/contracts/*/openapi.yaml` y en `docs/architecture.md`.
 
 ## Arranque local
 
@@ -82,18 +95,19 @@ Eso levanta:
 |---|---|---|
 | MySQL 8.4 | 3306 | Reportes de la migración CSV |
 | PostgreSQL 16 | 5432 | Datos de `core-service` |
-| data-migration | (one-shot) | Procesa los CSV y sale con código 0 |
+| data-migration | (one-shot) | Procesa los CSV `data/legacy/movimientos_financieros_diarios.csv`, `data/legacy/intereses_trimestrales.csv` y `data/legacy/estados_financieros_anuales.csv` con `dailyTransactionsJob`, `monthlyInterestsJob` y `annualGenerationJob`, y sale con código 0 |
 | config-server | 8888 | Configuración nativa (`config-repo/`) |
 | eureka-server | 8761 | Service discovery |
 | authorization-server | 9000 | Emisor OAuth2/OIDC |
 | Kafka (KRaft) | 9092 | Broker de la saga de intereses |
-| core-service | 8080, 8453 | API interna de dominio; 8453 es el conector TLS de PIN |
+| core-service | 8080, 8453 | API interna de dominio: abre, cierra y mantiene cuentas; depósitos, transferencias, pagos externos y actualización del perfil del cliente. 8453 es el conector TLS de PIN |
 | interests-service | 8084 | Cálculo/acreditación de intereses anuales |
 | bff-web | 8081 | Dashboard, historial e intereses |
 | bff-mobile | 8082 | Resumen aplanado de cuenta |
 | bff-atm | 8083 | Saldo y retiro |
+| gateway | 8090 | Enruta `/web`, `/mobile` y `/atm` |
 
-El job espera a que MySQL esté sano. `kafka-init` espera a que el broker esté sano y crea los tres tópicos. `core-service` espera a PostgreSQL, a que la migración termine con éxito, a Eureka y a `kafka-init`. `eureka-server` espera a `config-server`. `interests-service` espera a `config-server`, `eureka-server`, `core-service` y `kafka-init`. Los BFFs esperan a que `core-service` reporte `/actuator/health` en UP; `bff-web` además espera a `interests-service`.
+El job espera a que MySQL esté sano. `kafka-init` espera a que el broker esté sano y crea los tópicos `interests.calculated`, `interests.credit-results`, `transactions.confirmed` y `security.alerts`. `core-service` espera a PostgreSQL, a que la migración termine con éxito, a Eureka y a `kafka-init`. `eureka-server` espera a `config-server`. `interests-service` espera a `config-server`, `eureka-server`, `core-service` y `kafka-init`. Los BFFs esperan a que `core-service` reporte `/actuator/health` en UP; `bff-web` además espera a `interests-service`.
 
 Enrutamiento de intereses en `bff-web`:
 
@@ -130,7 +144,7 @@ docker compose exec mysql mysql -umigration -pmigration xyz_bank_migration -e "S
 docker compose exec mysql mysql -umigration -pmigration xyz_bank_migration -e "SELECT COUNT(*) FROM annual_audit_reports;"
 ```
 
-`status = SUCCESS` en `migration_executions` para `dailyTransactionsJob`, `monthlyInterestsJob` y `annualGenerationJob` indica que el job ya corrió. Un segundo `docker compose up` reutiliza el volumen y el job vuelve a salir 0 (ya migrado).
+Las rutas CSV por defecto son `data/legacy/movimientos_financieros_diarios.csv`, `data/legacy/intereses_trimestrales.csv` y `data/legacy/estados_financieros_anuales.csv`. `status = SUCCESS` en `migration_executions` para `dailyTransactionsJob`, `monthlyInterestsJob` y `annualGenerationJob` indica que el job ya corrió. Un segundo `docker compose up` reutiliza el volumen y el job vuelve a salir 0 (ya migrado).
 
 ## Certificados TLS de desarrollo
 
@@ -222,7 +236,7 @@ curl -sS http://localhost:8761/actuator/health
 curl -sS --cacert dev/certs/ca.crt https://localhost:8081/v3/api-docs
 ```
 
-Contratos en el repo: [`docs/contracts/`](docs/contracts/). Arquitectura: [`docs/architecture.md`](docs/architecture.md). ADR de BFFs: [`docs/adr/001-bff-strategy.md`](docs/adr/001-bff-strategy.md). ADR de la saga de intereses: [`docs/adr/002-event-architecture.md`](docs/adr/002-event-architecture.md).
+Contratos en el repo: [`docs/contracts/`](docs/contracts/). Arquitectura: [`docs/architecture.md`](docs/architecture.md). ADR de la saga de intereses: [`docs/adr/002-event-architecture.md`](docs/adr/002-event-architecture.md).
 
 ## Tests
 

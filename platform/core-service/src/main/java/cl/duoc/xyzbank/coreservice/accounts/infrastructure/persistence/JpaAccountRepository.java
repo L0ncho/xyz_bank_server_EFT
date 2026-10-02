@@ -3,6 +3,7 @@ package cl.duoc.xyzbank.coreservice.accounts.infrastructure.persistence;
 import cl.duoc.xyzbank.coredomain.accounts.domain.entities.Account;
 import cl.duoc.xyzbank.coredomain.accounts.domain.repositories.AccountRepository;
 import cl.duoc.xyzbank.coredomain.accounts.domain.valueobjects.AccountNumber;
+import cl.duoc.xyzbank.coredomain.accounts.domain.valueobjects.AccountStatus;
 import cl.duoc.xyzbank.coredomain.accounts.domain.valueobjects.DailyWithdrawalUsage;
 import cl.duoc.xyzbank.coredomain.accounts.domain.valueobjects.Money;
 import cl.duoc.xyzbank.coredomain.shared.domain.DomainException;
@@ -43,6 +44,12 @@ public class JpaAccountRepository implements AccountRepository {
     }
 
     @Override
+    public Optional<Account> findByAccountNumber(AccountNumber accountNumber) {
+        return jpaRepository.findByAccountNumber(accountNumber.getValue())
+                .map(this::toDomain);
+    }
+
+    @Override
     public List<Account> findByCustomerId(Id customerId) {
         return jpaRepository.findByCustomerId(UUID.fromString(customerId.getValue())).stream()
                 .map(this::toDomain)
@@ -58,7 +65,8 @@ public class JpaAccountRepository implements AccountRepository {
                 account.getBalance().getCurrency(),
                 account.getVersion(),
                 account.getDailyWithdrawnAmount().getAmount(),
-                account.getDailyWithdrawnDate().orElse(null));
+                account.getDailyWithdrawnDate().orElse(null),
+                account.getStatus().name());
     }
 
     private Account toDomain(AccountJpaEntity entity) {
@@ -70,6 +78,7 @@ public class JpaAccountRepository implements AccountRepository {
                 entity.getVersion(),
                 DailyWithdrawalUsage.create(
                         Money.create(entity.getDailyWithdrawnAmount(), entity.getCurrency()),
-                        Optional.ofNullable(entity.getDailyWithdrawnDate())));
+                        Optional.ofNullable(entity.getDailyWithdrawnDate())),
+                AccountStatus.valueOf(entity.getStatus()));
     }
 }

@@ -7,6 +7,7 @@ import cl.duoc.xyzbank.coreservice.auth.application.usecases.VerifyPinUseCase;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,6 +24,7 @@ public class PinVerificationController {
     }
 
     @PostMapping("/internal/auth/atm/pin-verifications")
+    @Transactional
     public ResponseEntity<?> verify(@Valid @RequestBody PinVerificationRequest request) {
         PinVerificationOutcome outcome = verifyPinUseCase.execute(request.cardNumber(), request.pin());
         return switch (outcome.result()) {

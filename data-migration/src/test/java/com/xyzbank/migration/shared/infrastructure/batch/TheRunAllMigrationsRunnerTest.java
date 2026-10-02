@@ -41,6 +41,7 @@ class TheRunAllMigrationsRunnerTest {
         registry.add("migration.data.daily-transactions", () -> "file:data/semana_3/transacciones.csv");
         registry.add("migration.data.monthly-interests", () -> "file:data/semana_3/intereses.csv");
         registry.add("migration.data.annual-accounts", () -> "file:data/semana_3/cuentas_anuales.csv");
+        registry.add("migration.batch.skip-limit", () -> "2000");
     }
 
     @Autowired

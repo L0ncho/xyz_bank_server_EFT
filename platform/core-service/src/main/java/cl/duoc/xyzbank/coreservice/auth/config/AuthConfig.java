@@ -8,6 +8,7 @@ import cl.duoc.xyzbank.coreservice.auth.application.usecases.RevokeDeviceUseCase
 import cl.duoc.xyzbank.coreservice.auth.application.usecases.RotateMobileRefreshTokenUseCase;
 import cl.duoc.xyzbank.coreservice.auth.application.usecases.RotateWebRefreshTokenUseCase;
 import cl.duoc.xyzbank.coreservice.auth.application.usecases.VerifyPinUseCase;
+import cl.duoc.xyzbank.coreservice.events.application.ports.SecurityAlertPublisher;
 import cl.duoc.xyzbank.sharedsecurity.callercontext.JwtCallerContextAdapter;
 import cl.duoc.xyzbank.sharedsecurity.callercontext.OpaqueTokenGenerator;
 import org.springframework.beans.factory.annotation.Value;
@@ -38,8 +39,9 @@ public class AuthConfig {
     }
 
     @Bean
-    public VerifyPinUseCase verifyPinUseCase(CardRepository cardRepository, PinHasher pinHasher) {
-        return new VerifyPinUseCase(cardRepository, pinHasher);
+    public VerifyPinUseCase verifyPinUseCase(
+            CardRepository cardRepository, PinHasher pinHasher, SecurityAlertPublisher securityAlertPublisher) {
+        return new VerifyPinUseCase(cardRepository, pinHasher, securityAlertPublisher);
     }
 
     @Bean

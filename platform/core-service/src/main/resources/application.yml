@@ -41,6 +41,9 @@ app:
     transaction-confirmed:
       enabled: ${FEATURE_TRANSACTION_CONFIRMED_EVENTS:false}
       topic: transactions.confirmed
+    security-alerts:
+      enabled: ${FEATURE_SECURITY_ALERTS:false}
+      topic: security.alerts
   outbox:
     relay-delay-ms: ${OUTBOX_RELAY_DELAY_MS:1000}
 

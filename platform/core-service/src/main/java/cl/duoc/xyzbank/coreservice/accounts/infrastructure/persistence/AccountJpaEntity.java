@@ -39,6 +39,9 @@ public class AccountJpaEntity {
     @Column(name = "daily_withdrawn_date")
     private LocalDate dailyWithdrawnDate;
 
+    @Column(nullable = false)
+    private String status;
+
     protected AccountJpaEntity() {
     }
 
@@ -50,7 +53,8 @@ public class AccountJpaEntity {
             String currency,
             long version,
             BigDecimal dailyWithdrawnAmount,
-            LocalDate dailyWithdrawnDate) {
+            LocalDate dailyWithdrawnDate,
+            String status) {
         this.id = id;
         this.accountNumber = accountNumber;
         this.customerId = customerId;
@@ -59,6 +63,7 @@ public class AccountJpaEntity {
         this.version = version;
         this.dailyWithdrawnAmount = dailyWithdrawnAmount;
         this.dailyWithdrawnDate = dailyWithdrawnDate;
+        this.status = status;
     }
 
     public UUID getId() {
@@ -91,5 +96,9 @@ public class AccountJpaEntity {
 
     public LocalDate getDailyWithdrawnDate() {
         return dailyWithdrawnDate;
+    }
+
+    public String getStatus() {
+        return status;
     }
 }

@@ -1,40 +1,52 @@
-# Architecture
+# Arquitectura
 
-XYZ Bank exposes three channel-specific backends for frontend (BFFs) in front of an internal platform: `core-service` (sole PostgreSQL owner), plus `config-server`, `eureka-server`, and `interests-service` for annual interest calculation and cutover. A single Apache Kafka broker in KRaft mode carries the interest-credit saga. The legacy CSV sanitization job writes reports to a separate MySQL instance; those reports are not loaded into core-service tables.
+XYZ Bank expone tres backends por canal (BFF) delante de una plataforma interna: `core-service` (único dueño de PostgreSQL), más `config-server`, `eureka-server` e `interests-service` para el cálculo y el corte anual de intereses. Un único broker Apache Kafka en modo KRaft transporta la saga de acreditación de intereses. El job de saneamiento de los CSV legados escribe reportes en una instancia MySQL aparte; esos reportes no se cargan en las tablas de `core-service`.
 
-## Topology
+## Topología
 
-Each channel proves who the caller is with a real credential instead of a trusted header: OAuth2/OIDC session cookie for web, a device-bound JWT for mobile, and mTLS plus a PIN-verified session for ATM. Every client-facing edge is TLS; BFF→platform edges stay plain HTTP except the one call that carries a raw PIN, which is TLS-only by design.
+Un `gateway` escucha en el puerto **8090** y queda delante de los tres BFF. Enruta `/web` hacia `bff-web`, `/mobile` hacia `bff-mobile` y `/atm` hacia `bff-atm`, y quita ese prefijo antes de reenviar. Cada canal prueba quién llama con una credencial real, no con una cabecera de confianza: cookie de sesión OAuth2/OIDC en web, JWT ligado al dispositivo en mobile, y mTLS más una sesión verificada por PIN en ATM. Todo borde de cara al cliente va por TLS. El borde BFF → plataforma sigue en HTTP plano, salvo la única llamada que lleva el PIN en claro, que es solo TLS por diseño.
 
-`bff-web` routes interest-summary traffic to `interests-service` (feature flag on by default). Mobile and ATM keep talking to `core-service` directly. `interests-service` loads config from `config-server`, registers with Eureka, discovers `core-service` by service id (LoadBalancer), and wraps outbound HTTP calls to core with a Resilience4j circuit breaker. The annual interest summary GET stays synchronous and forwards the user bearer. Interest credit stays on that HTTP path while `FEATURE_INTEREST_CREDIT_VIA_KAFKA` is `false` (the default): `interests-service` authenticates with its service credential and JWT scope `interests:write`. With the flag `true`, the same calculation is published as `InterestCalculated` and `core-service` credits the account, then publishes the result. Decision record: [`docs/adr/002-event-architecture.md`](adr/002-event-architecture.md).
+`core-service` abre, cierra y mantiene cuentas, acepta depósitos, transferencias y pagos externos, y actualiza el nombre y el correo del cliente. El GET de saldo no cambia. Una cuenta cerrada no acepta movimientos. El retiro del ATM tampoco cambia.
+
+`bff-web` enruta el tráfico de resumen de intereses a `interests-service` (la flag está encendida por defecto). Mobile y ATM siguen hablando con `core-service` directo. `interests-service` carga la configuración desde `config-server`, se registra en Eureka, descubre `core-service` por id de servicio (LoadBalancer) y envuelve las llamadas HTTP salientes a core con un circuit breaker de Resilience4j. El GET del resumen anual de intereses sigue síncrono y reenvía el bearer del usuario. La acreditación de intereses se queda en ese camino HTTP mientras `FEATURE_INTEREST_CREDIT_VIA_KAFKA` es `false` (el default): `interests-service` se autentica con su credencial de servicio y el scope JWT `interests:write`. Con la flag en `true`, el mismo cálculo se publica como `InterestCalculated` y `core-service` acredita la cuenta y luego publica el resultado. Registro de la decisión: [`docs/adr/002-event-architecture.md`](adr/002-event-architecture.md).
+
+Cuando la verificación de PIN bloquea una tarjeta que estaba desbloqueada, `core-service` publica `CardBlocked` en el tópico `security.alerts`. El evento no incluye el PIN. La flag es `FEATURE_SECURITY_ALERTS` (`false` en la aplicación, `true` en Compose).
 
 ```mermaid
 flowchart LR
-  subgraph clients [Clients]
-    WebClient[Web client]
-    MobileClient[Mobile client]
-    AtmClient[ATM client]
+  subgraph clients [Clientes]
+    WebClient[Cliente web]
+    MobileClient[Cliente mobile]
+    AtmClient[Cliente ATM]
   end
 
-  subgraph bffs [BFFs - channel auth]
-    BffWeb[bff-web OAuth2/OIDC session cookie]
-    BffMobile[bff-mobile device-bound JWT]
-    BffAtm[bff-atm mTLS + PIN session]
+  Gateway[gateway :8090]
+
+  subgraph bffs [BFFs - autenticación de canal]
+    BffWeb[bff-web cookie de sesión OAuth2/OIDC]
+    BffMobile[bff-mobile JWT ligado al dispositivo]
+    BffAtm[bff-atm mTLS + sesión PIN]
   end
 
-  subgraph platform [Platform]
+  subgraph platform [Plataforma]
     ConfigServer[config-server]
     EurekaServer[eureka-server]
     InterestsService[interests-service]
   end
 
   CoreService[core-service]
-  CoreServicePin[core-service PIN-verification connector]
+  CoreServicePin[conector de verificación de PIN de core-service]
   Kafka[(Kafka KRaft)]
   Postgres[(PostgreSQL 16)]
   MySQL[(MySQL 8.4)]
-  Migration[data-migration one-shot]
+  Migration[data-migration una sola ejecución]
 
+  WebClient -- HTTPS --> Gateway
+  MobileClient -- HTTPS --> Gateway
+  AtmClient -- HTTPS --> Gateway
+  Gateway -- "/web" --> BffWeb
+  Gateway -- "/mobile" --> BffMobile
+  Gateway -- "/atm" --> BffAtm
   WebClient -- HTTPS --> BffWeb
   MobileClient -- HTTPS --> BffMobile
   AtmClient -- HTTPS + mTLS --> BffAtm
@@ -49,20 +61,21 @@ flowchart LR
   InterestsService -- HTTP --> CoreService
   InterestsService -- "InterestCalculated" --> Kafka
   Kafka -- "InterestCalculated" --> CoreService
-  CoreService -- "credit result" --> Kafka
-  Kafka -- "credit result" --> InterestsService
+  CoreService -- "resultado del crédito" --> Kafka
+  Kafka -- "resultado del crédito" --> InterestsService
+  CoreService -- "security.alerts" --> Kafka
   CoreService --> Postgres
   CoreServicePin -.-> CoreService
   Migration --> MySQL
 ```
 
-`core-service`'s PIN-verification connector (`CoreServicePin` above) is a second Tomcat connector on the same service, not a separate deployable — it shares `core-service`'s process and database access, drawn separately here only to show it terminates TLS while every other `core-service` endpoint stays plain HTTP.
+El conector de verificación de PIN de `core-service` (`CoreServicePin` arriba) es un segundo conector Tomcat del mismo servicio, no un artefacto aparte: comparte el proceso y el acceso a base de datos de `core-service`. Se dibuja aparte solo para mostrar que ese conector termina TLS, mientras el resto de los endpoints de `core-service` siguen en HTTP plano.
 
-What stays constant regardless of channel: one BFF per channel, `core-service` as the only database owner for banking entities, MySQL reserved for migration reports, and the existing BFF payload contracts. What each channel's credential proves and how it's validated is documented in `docs/contracts/*/openapi.yaml`. Kafka coordinates the interest credit when the feature flag is on. It does not own account state.
+Lo que no cambia según el canal: un BFF por canal, `core-service` como único dueño de la base de las entidades bancarias, MySQL reservado a los reportes de migración, y los contratos de payload que ya tenían los BFF. Qué prueba la credencial de cada canal y cómo se valida está en `docs/contracts/*/openapi.yaml`. Kafka coordina el crédito de intereses cuando la flag está encendida. No es dueño del estado de la cuenta. `security.alerts` avisa el bloqueo de una tarjeta; tampoco mueve saldo.
 
-## Interest flows
+## Flujos de intereses
 
-### Query — annual interest summary
+### Consulta — resumen anual de intereses
 
 ```mermaid
 sequenceDiagram
@@ -72,50 +85,50 @@ sequenceDiagram
   participant Db as PostgreSQL
 
   Web->>Interests: GET /accounts/{id}/interest-summary
-  Note over Web,Interests: user JWT + channel session
+  Note over Web,Interests: JWT de usuario + sesión de canal
   Interests->>Core: GET /internal/accounts/{id}/interest-summary
-  Note over Interests,Core: X-Service-Credential interests + user JWT
-  Core->>Db: read annual_interest_summaries
-  Db-->>Core: row
-  Core-->>Interests: summary
-  Interests-->>Web: summary
+  Note over Interests,Core: credencial de servicio interests + JWT de usuario
+  Core->>Db: lee annual_interest_summaries
+  Db-->>Core: fila
+  Core-->>Interests: resumen
+  Interests-->>Web: resumen
 ```
 
-### Command — apply annual interest (HTTP, default)
+### Comando — aplicar interés anual (HTTP, por defecto)
 
-`FEATURE_INTEREST_CREDIT_VIA_KAFKA=false`. This is the path Compose starts with, and the path the current end-to-end tests exercise.
+`FEATURE_INTEREST_CREDIT_VIA_KAFKA=false`. Es el camino con el que arranca Compose y el que ejercitan los tests de punta a punta actuales.
 
 ```mermaid
 sequenceDiagram
-  participant Caller as interests-service client
+  participant Caller as cliente de interests-service
   participant Interests as interests-service
   participant Core as core-service
   participant Db as PostgreSQL
 
   Caller->>Interests: POST /accounts/{id}/interest-applications?year=
   Interests->>Core: GET /internal/accounts/{id}/balance
-  Note over Interests,Core: interests credential + JWT interests:write
-  Core->>Db: read accounts
-  Db-->>Core: balance
-  Core-->>Interests: balance
-  Note over Interests: rate from Config Server, compute amount
+  Note over Interests,Core: credencial interests + JWT interests:write
+  Core->>Db: lee accounts
+  Db-->>Core: saldo
+  Core-->>Interests: saldo
+  Note over Interests: tasa desde Config Server, calcula el monto
   Interests->>Core: POST /internal/accounts/{id}/interest-credits
   Note over Interests,Core: Idempotency-Key interest-{id}-{year}
-  Core->>Db: credit balance, CREDIT txn, summary
-  Db-->>Core: ok or 409
+  Core->>Db: acredita saldo, transacción CREDIT, resumen
+  Db-->>Core: ok o 409
   Core-->>Interests: InterestCreditResponse
   Interests-->>Caller: InterestSummaryResponse
 ```
 
-Optimistic locking on `accounts.version` and the unique `(account_id, year)` on summaries prevent double application; repeating the same `Idempotency-Key` replays the original credit. Outbound calls from `interests-service` to `core-service` use Resilience4j circuit breaker/retry so repeated core failures open the breaker and fail fast. With the Kafka flag on, `creditInterest` is not called, so that breaker no longer covers the credit. `fetchInterestSummary` and `fetchAccountBalance` stay on it.
+El bloqueo optimista de `accounts.version` y el único `(account_id, year)` de los resúmenes impiden una doble aplicación. Repetir la misma `Idempotency-Key` reproduce el crédito original. Las llamadas salientes de `interests-service` a `core-service` usan circuit breaker y retry de Resilience4j: si core falla seguido, el breaker se abre y la llamada falla rápido. Con la flag de Kafka encendida, `creditInterest` no se llama, así que ese breaker ya no cubre el crédito. `fetchInterestSummary` y `fetchAccountBalance` siguen en él.
 
-### Command — apply annual interest (Kafka saga)
+### Comando — aplicar interés anual (saga Kafka)
 
-`FEATURE_INTEREST_CREDIT_VIA_KAFKA=true`. The POST returns the calculated summary as soon as `InterestCalculated` is published. The calculation stays `PENDING` in the in-memory repository until `interests.credit-results` closes it. The HTTP credit endpoint remains available for the flag-off path.
+`FEATURE_INTEREST_CREDIT_VIA_KAFKA=true`. El POST devuelve el resumen calculado en cuanto se publica `InterestCalculated`. El cálculo queda `PENDING` en el repositorio en memoria hasta que `interests.credit-results` lo cierra. El endpoint HTTP de crédito sigue disponible para el camino con la flag apagada.
 
 ```mermaid
 sequenceDiagram
-  participant Caller as interests-service client
+  participant Caller as cliente de interests-service
   participant Interests as interests-service
   participant Calculated as interests.calculated
   participant Core as core-service
@@ -124,22 +137,22 @@ sequenceDiagram
 
   Caller->>Interests: POST /accounts/{id}/interest-applications?year=
   Interests->>Core: GET /internal/accounts/{id}/balance
-  Core-->>Interests: balance
-  Note over Interests: compute amount, save PENDING
-  Interests->>Calculated: InterestCalculated key accountId
+  Core-->>Interests: saldo
+  Note over Interests: calcula el monto y guarda PENDING
+  Interests->>Calculated: InterestCalculated clave accountId
   Interests-->>Caller: InterestSummaryResponse
   Core->>Calculated: consume
-  Core->>Db: credit plus InterestCreditApplied and TransactionConfirmed in one transaction
-  Core->>Results: relay publishes InterestCreditApplied or InterestCreditRejected
+  Core->>Db: crédito más InterestCreditApplied y TransactionConfirmed en una transacción
+  Core->>Results: el relay publica InterestCreditApplied o InterestCreditRejected
   Interests->>Results: consume
-  Note over Interests: close calculation APPLIED or REJECTED, idempotent by eventId
+  Note over Interests: cierra el cálculo como APPLIED o REJECTED, idempotente por eventId
 ```
 
-The partition key is `accountId`. Delivery is at-least-once. `eventId` is `interest:{accountId}:{year}`. The HTTP idempotency key on the synchronous path stays `interest-{accountId}-{year}`. A duplicate `eventId` does not credit the balance twice. A failed credit transaction leaves no outbox row. A business rejection (`VALIDATION`, `NOT_FOUND`, or `CONFLICT`) publishes `InterestCreditRejected` with `reason`, does not change the balance, and commits the consumer offset so the single partition is not blocked. With the Kafka flag off, an HTTP credit does not write interest-result outbox rows. `core-service` is the only service with an outbox, because it is the only service with a local database transaction around the credit. See [`docs/adr/002-event-architecture.md`](adr/002-event-architecture.md).
+La clave de partición es `accountId`. La entrega es at-least-once. El `eventId` es `interest:{accountId}:{year}`. La clave de idempotencia HTTP del camino síncrono sigue siendo `interest-{accountId}-{year}`. Un `eventId` duplicado no acredita el saldo dos veces. Si la transacción del crédito falla, no queda fila en el outbox. Un rechazo de negocio (`VALIDATION`, `NOT_FOUND` o `CONFLICT`) publica `InterestCreditRejected` con `reason`, no cambia el saldo y confirma el offset del consumidor para no bloquear la partición. Con la flag de Kafka apagada, un crédito HTTP no escribe filas de outbox de resultado de interés. `core-service` es el único servicio con outbox, porque es el único con una transacción local de base alrededor del crédito. Ver [`docs/adr/002-event-architecture.md`](adr/002-event-architecture.md).
 
-### Event — TransactionConfirmed (every confirmed money movement)
+### Evento — TransactionConfirmed (cada movimiento de dinero confirmado)
 
-When `FEATURE_TRANSACTION_CONFIRMED_EVENTS` is on, every confirmed withdrawal and every confirmed interest credit writes a `TransactionConfirmed` row into the same transactional outbox used by the interest saga. The outbox relay publishes it to `transactions.confirmed` with partition key `accountId`. The ATM withdrawal HTTP contract is unchanged: the event is a side effect of `persistWithdrawal`. An idempotent withdrawal retry does not insert a second event. A rejected withdrawal or a rejected interest credit does not insert `TransactionConfirmed`.
+Cuando `FEATURE_TRANSACTION_CONFIRMED_EVENTS` está encendida, cada retiro confirmado y cada crédito de interés confirmado escribe una fila `TransactionConfirmed` en el mismo outbox transaccional de la saga de intereses. El relay del outbox la publica en `transactions.confirmed` con clave de partición `accountId`. El contrato HTTP del retiro ATM no cambia: el evento es un efecto lateral de `persistWithdrawal`. Un reintento idempotente del retiro no inserta un segundo evento. Un retiro rechazado o un crédito de interés rechazado no inserta `TransactionConfirmed`.
 
 ```mermaid
 sequenceDiagram
@@ -150,15 +163,15 @@ sequenceDiagram
   participant Interests as interests-service
   participant Calculated as interests.calculated
 
-  Atm->>Core: POST /internal/accounts/{id}/withdrawals (sync)
-  Core->>Db: debit + TransactionConfirmed outbox
+  Atm->>Core: POST /internal/accounts/{id}/withdrawals (síncrono)
+  Core->>Db: débito + outbox TransactionConfirmed
   Core-->>Atm: 201 WithdrawalResponse
-  Core->>Confirmed: relay TransactionConfirmed type WITHDRAWAL
+  Core->>Confirmed: relay TransactionConfirmed tipo WITHDRAWAL
 
   Interests->>Calculated: InterestCalculated
   Core->>Calculated: consume
-  Core->>Db: credit + InterestCreditApplied + TransactionConfirmed
-  Core->>Confirmed: relay TransactionConfirmed type INTEREST_CREDIT
+  Core->>Db: crédito + InterestCreditApplied + TransactionConfirmed
+  Core->>Confirmed: relay TransactionConfirmed tipo INTEREST_CREDIT
 ```
 
-`TransactionConfirmed` payload: `eventId` (transaction id), `eventType`, `schemaVersion`, `accountId`, `type` (`WITHDRAWAL` | `INTEREST_CREDIT`), `amount`, `currency`, `occurredAt`. No card number, PIN, personal customer data, or ATM terminal id.
+Payload de `TransactionConfirmed`: `eventId` (id de la transacción), `eventType`, `schemaVersion`, `accountId`, `type` (`WITHDRAWAL` | `INTEREST_CREDIT`), `amount`, `currency`, `occurredAt`. No lleva número de tarjeta, PIN, datos personales del cliente ni id de terminal ATM.

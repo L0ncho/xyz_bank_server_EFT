@@ -17,6 +17,7 @@
         <module>platform/shared-security</module>
         <module>platform/config-server</module>
         <module>platform/eureka-server</module>
+        <module>platform/gateway</module>
         <module>platform/authorization-server</module>
         <module>platform/interests-service</module>
         <module>platform/core-service</module>

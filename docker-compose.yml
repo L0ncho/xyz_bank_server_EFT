@@ -143,6 +143,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       FEATURE_INTEREST_CREDIT_VIA_KAFKA: ${FEATURE_INTEREST_CREDIT_VIA_KAFKA:-false}
       FEATURE_TRANSACTION_CONFIRMED_EVENTS: ${FEATURE_TRANSACTION_CONFIRMED_EVENTS:-true}
+      FEATURE_SECURITY_ALERTS: ${FEATURE_SECURITY_ALERTS:-true}
       ISSUER_JWK_SET_URI: http://authorization-server:9000/oauth2/jwks
     healthcheck:
       test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:8080/actuator/health | grep -q UP"]
@@ -188,6 +189,7 @@ services:
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic interests.calculated --partitions 1 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic interests.credit-results --partitions 1 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic transactions.confirmed --partitions 1 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic security.alerts --partitions 1 --replication-factor 1
 
   interests-service:
     build:
@@ -237,9 +239,13 @@ services:
         condition: service_healthy
       authorization-server:
         condition: service_healthy
+      eureka-server:
+        condition: service_healthy
     environment:
       CONFIG_SERVER_URL: http://config-server:8888
-      CORE_SERVICE_BASE_URL: http://core-service:8080
+      EUREKA_CLIENT_ENABLED: "true"
+      EUREKA_SERVER_URL: http://eureka-server:8761
+      CORE_SERVICE_BASE_URL: http://core-service
       OIDC_AUTHORIZATION_URI: http://localhost:9000/oauth2/authorize
       OIDC_TOKEN_URI: http://authorization-server:9000/oauth2/token
       OIDC_JWK_SET_URI: http://authorization-server:9000/oauth2/jwks
@@ -267,9 +273,13 @@ services:
     depends_on:
       core-service:
         condition: service_healthy
+      eureka-server:
+        condition: service_healthy
     environment:
       CONFIG_SERVER_URL: http://config-server:8888
-      CORE_SERVICE_BASE_URL: http://core-service:8080
+      EUREKA_CLIENT_ENABLED: "true"
+      EUREKA_SERVER_URL: http://eureka-server:8761
+      CORE_SERVICE_BASE_URL: http://core-service
       CORE_SERVICE_CREDENTIAL: dev-service-credential-mobile
       TLS_KEYSTORE_PATH: file:/certs/keystore.p12
       TLS_KEYSTORE_PASSWORD: xyzbank-dev
@@ -294,9 +304,13 @@ services:
     depends_on:
       core-service:
         condition: service_healthy
+      eureka-server:
+        condition: service_healthy
     environment:
       CONFIG_SERVER_URL: http://config-server:8888
-      CORE_SERVICE_BASE_URL: http://core-service:8080
+      EUREKA_CLIENT_ENABLED: "true"
+      EUREKA_SERVER_URL: http://eureka-server:8761
+      CORE_SERVICE_BASE_URL: http://core-service
       CORE_SERVICE_PIN_VERIFICATION_BASE_URL: https://core-service:8453
       CORE_SERVICE_CREDENTIAL: dev-service-credential-atm
       TLS_KEYSTORE_PATH: file:/certs/keystore.p12
@@ -308,6 +322,31 @@ services:
       # the health check must present one: it uses the same dev terminal certificate a
       # real ATM terminal would, via curl (busybox wget cannot present a client cert)
       test: ["CMD", "sh", "-c", "curl -sk --cert-type P12 --cert /certs/terminal-keystore.p12:xyzbank-dev https://127.0.0.1:8083/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: platform/gateway/Dockerfile
+    container_name: xyz-bank-gateway
+    ports:
+      - "8090:8090"
+    depends_on:
+      bff-web:
+        condition: service_healthy
+      bff-mobile:
+        condition: service_healthy
+      bff-atm:
+        condition: service_healthy
+    environment:
+      BFF_WEB_BASE_URL: https://bff-web:8081
+      BFF_MOBILE_BASE_URL: https://bff-mobile:8082
+      BFF_ATM_BASE_URL: https://bff-atm:8083
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:8090/actuator/health | grep -q UP"]
       interval: 10s
       timeout: 5s
       retries: 20

@@ -1,0 +1,443 @@
+{
+  "description": "Descriptor ECS de los servicios de docker-compose.yml. No crea recursos ni despliega. La imagen, el puerto, el healthcheck y las variables son los de Compose. Contraseñas, credenciales de canal y el secreto JWT se nombran en secrets; su valor no está en este archivo.",
+  "taskDefinitions": [
+    {
+      "family": "xyz-bank-mysql",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "containerDefinitions": [
+        {
+          "name": "mysql",
+          "image": "mysql:8.4",
+          "portMappings": [
+            { "containerPort": 3306, "hostPort": 3306, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$MYSQL_ROOT_PASSWORD\""],
+            "interval": 5,
+            "timeout": 5,
+            "retries": 20
+          },
+          "environment": [
+            { "name": "MYSQL_DATABASE", "value": "xyz_bank_migration" },
+            { "name": "MYSQL_USER", "value": "migration" }
+          ],
+          "secrets": [
+            { "name": "MYSQL_PASSWORD", "valueFrom": "xyz-bank/mysql/MYSQL_PASSWORD" },
+            { "name": "MYSQL_ROOT_PASSWORD", "valueFrom": "xyz-bank/mysql/MYSQL_ROOT_PASSWORD" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-postgres",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "containerDefinitions": [
+        {
+          "name": "postgres",
+          "image": "postgres:16-alpine",
+          "portMappings": [
+            { "containerPort": 5432, "hostPort": 5432, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "pg_isready -U core_service -d core_service"],
+            "interval": 5,
+            "timeout": 5,
+            "retries": 20
+          },
+          "environment": [
+            { "name": "POSTGRES_DB", "value": "core_service" },
+            { "name": "POSTGRES_USER", "value": "core_service" }
+          ],
+          "secrets": [
+            { "name": "POSTGRES_PASSWORD", "valueFrom": "xyz-bank/postgres/POSTGRES_PASSWORD" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-data-migration",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "imageBuild": {
+        "context": ".",
+        "dockerfile": "data-migration/Dockerfile"
+      },
+      "containerDefinitions": [
+        {
+          "name": "data-migration",
+          "image": "xyz-bank-data-migration",
+          "environment": [
+            { "name": "DB_HOST", "value": "mysql" },
+            { "name": "DB_PORT", "value": "3306" },
+            { "name": "DB_NAME", "value": "xyz_bank_migration" },
+            { "name": "DB_USERNAME", "value": "migration" },
+            { "name": "MIGRATION_RUN_ALL", "value": "true" }
+          ],
+          "secrets": [
+            { "name": "DB_PASSWORD", "valueFrom": "xyz-bank/data-migration/DB_PASSWORD" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-config-server",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "imageBuild": {
+        "context": ".",
+        "dockerfile": "platform/config-server/Dockerfile"
+      },
+      "containerDefinitions": [
+        {
+          "name": "config-server",
+          "image": "xyz-bank-config-server",
+          "portMappings": [
+            { "containerPort": 8888, "hostPort": 8888, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "wget -qO- http://127.0.0.1:8888/actuator/health | grep -q UP"],
+            "interval": 10,
+            "timeout": 5,
+            "retries": 20,
+            "startPeriod": 30
+          },
+          "environment": [
+            { "name": "CONFIG_REPO_PATH", "value": "/config-repo" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-eureka-server",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "imageBuild": {
+        "context": ".",
+        "dockerfile": "platform/eureka-server/Dockerfile"
+      },
+      "containerDefinitions": [
+        {
+          "name": "eureka-server",
+          "image": "xyz-bank-eureka-server",
+          "portMappings": [
+            { "containerPort": 8761, "hostPort": 8761, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "wget -qO- http://127.0.0.1:8761/actuator/health | grep -q UP"],
+            "interval": 10,
+            "timeout": 5,
+            "retries": 20,
+            "startPeriod": 40
+          }
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-authorization-server",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "imageBuild": {
+        "context": ".",
+        "dockerfile": "platform/authorization-server/Dockerfile"
+      },
+      "containerDefinitions": [
+        {
+          "name": "authorization-server",
+          "image": "xyz-bank-authorization-server",
+          "portMappings": [
+            { "containerPort": 9000, "hostPort": 9000, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "wget -qO- http://127.0.0.1:9000/oauth2/jwks | grep -q keys"],
+            "interval": 10,
+            "timeout": 5,
+            "retries": 20,
+            "startPeriod": 30
+          }
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-core-service",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "imageBuild": {
+        "context": ".",
+        "dockerfile": "platform/core-service/Dockerfile"
+      },
+      "containerDefinitions": [
+        {
+          "name": "core-service",
+          "image": "xyz-bank-core-service",
+          "portMappings": [
+            { "containerPort": 8080, "hostPort": 8080, "protocol": "tcp" },
+            { "containerPort": 8453, "hostPort": 8453, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health | grep -q UP"],
+            "interval": 10,
+            "timeout": 5,
+            "retries": 20,
+            "startPeriod": 40
+          },
+          "environment": [
+            { "name": "CONFIG_SERVER_URL", "value": "http://config-server:8888" },
+            { "name": "DB_HOST", "value": "postgres" },
+            { "name": "DB_PORT", "value": "5432" },
+            { "name": "DB_NAME", "value": "core_service" },
+            { "name": "DB_USERNAME", "value": "core_service" },
+            { "name": "TLS_PIN_KEYSTORE_PATH", "value": "file:/certs/keystore.p12" },
+            { "name": "EUREKA_CLIENT_ENABLED", "value": "true" },
+            { "name": "EUREKA_SERVER_URL", "value": "http://eureka-server:8761" },
+            { "name": "KAFKA_BOOTSTRAP_SERVERS", "value": "kafka:9092" },
+            { "name": "FEATURE_INTEREST_CREDIT_VIA_KAFKA", "value": "false" },
+            { "name": "FEATURE_TRANSACTION_CONFIRMED_EVENTS", "value": "true" },
+            { "name": "FEATURE_SECURITY_ALERTS", "value": "true" },
+            { "name": "ISSUER_JWK_SET_URI", "value": "http://authorization-server:9000/oauth2/jwks" }
+          ],
+          "secrets": [
+            { "name": "DB_PASSWORD", "valueFrom": "xyz-bank/core-service/DB_PASSWORD" },
+            { "name": "TLS_PIN_KEYSTORE_PASSWORD", "valueFrom": "xyz-bank/core-service/TLS_PIN_KEYSTORE_PASSWORD" },
+            { "name": "SERVICE_CREDENTIAL_WEB", "valueFrom": "xyz-bank/core-service/SERVICE_CREDENTIAL_WEB" },
+            { "name": "SERVICE_CREDENTIAL_MOBILE", "valueFrom": "xyz-bank/core-service/SERVICE_CREDENTIAL_MOBILE" },
+            { "name": "SERVICE_CREDENTIAL_ATM", "valueFrom": "xyz-bank/core-service/SERVICE_CREDENTIAL_ATM" },
+            { "name": "SERVICE_CREDENTIAL_INTERESTS", "valueFrom": "xyz-bank/core-service/SERVICE_CREDENTIAL_INTERESTS" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-kafka",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "containerDefinitions": [
+        {
+          "name": "kafka",
+          "image": "apache/kafka:3.8.1",
+          "portMappings": [
+            { "containerPort": 9092, "hostPort": 9092, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"],
+            "interval": 10,
+            "timeout": 10,
+            "retries": 20,
+            "startPeriod": 20
+          },
+          "environment": [
+            { "name": "KAFKA_NODE_ID", "value": "1" },
+            { "name": "KAFKA_PROCESS_ROLES", "value": "broker,controller" },
+            { "name": "KAFKA_LISTENERS", "value": "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093" },
+            { "name": "KAFKA_ADVERTISED_LISTENERS", "value": "PLAINTEXT://kafka:9092" },
+            { "name": "KAFKA_CONTROLLER_LISTENER_NAMES", "value": "CONTROLLER" },
+            { "name": "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP", "value": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT" },
+            { "name": "KAFKA_CONTROLLER_QUORUM_VOTERS", "value": "1@kafka:9093" },
+            { "name": "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR", "value": "1" },
+            { "name": "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR", "value": "1" },
+            { "name": "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR", "value": "1" },
+            { "name": "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS", "value": "0" },
+            { "name": "CLUSTER_ID", "value": "4L6g3nShT-eMCtK--X86sw" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-kafka-init",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "containerDefinitions": [
+        {
+          "name": "kafka-init",
+          "image": "apache/kafka:3.8.1",
+          "entryPoint": ["/bin/bash", "-c"],
+          "command": [
+            "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic interests.calculated --partitions 1 --replication-factor 1 && /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic interests.credit-results --partitions 1 --replication-factor 1 && /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic transactions.confirmed --partitions 1 --replication-factor 1 && /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic security.alerts --partitions 1 --replication-factor 1"
+          ]
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-interests-service",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "imageBuild": {
+        "context": ".",
+        "dockerfile": "platform/interests-service/Dockerfile"
+      },
+      "containerDefinitions": [
+        {
+          "name": "interests-service",
+          "image": "xyz-bank-interests-service",
+          "portMappings": [
+            { "containerPort": 8084, "hostPort": 8084, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "wget -qO- http://127.0.0.1:8084/actuator/health | grep -q UP"],
+            "interval": 10,
+            "timeout": 5,
+            "retries": 20,
+            "startPeriod": 40
+          },
+          "environment": [
+            { "name": "CONFIG_SERVER_URL", "value": "http://config-server:8888" },
+            { "name": "EUREKA_SERVER_URL", "value": "http://eureka-server:8761" },
+            { "name": "KAFKA_BOOTSTRAP_SERVERS", "value": "kafka:9092" },
+            { "name": "FEATURE_INTEREST_CREDIT_VIA_KAFKA", "value": "false" }
+          ],
+          "secrets": [
+            { "name": "CORE_SERVICE_CREDENTIAL", "valueFrom": "xyz-bank/interests-service/CORE_SERVICE_CREDENTIAL" },
+            { "name": "CHANNEL_AUTH_JWT_SECRET", "valueFrom": "xyz-bank/interests-service/CHANNEL_AUTH_JWT_SECRET" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-bff-web",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "imageBuild": {
+        "context": ".",
+        "dockerfile": "bff/bff-web/Dockerfile"
+      },
+      "containerDefinitions": [
+        {
+          "name": "bff-web",
+          "image": "xyz-bank-bff-web",
+          "portMappings": [
+            { "containerPort": 8081, "hostPort": 8081, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1:8081/actuator/health | grep -q UP"],
+            "interval": 10,
+            "timeout": 5,
+            "retries": 20,
+            "startPeriod": 30
+          },
+          "environment": [
+            { "name": "CONFIG_SERVER_URL", "value": "http://config-server:8888" },
+            { "name": "EUREKA_CLIENT_ENABLED", "value": "true" },
+            { "name": "EUREKA_SERVER_URL", "value": "http://eureka-server:8761" },
+            { "name": "CORE_SERVICE_BASE_URL", "value": "http://core-service" },
+            { "name": "OIDC_AUTHORIZATION_URI", "value": "http://localhost:9000/oauth2/authorize" },
+            { "name": "OIDC_TOKEN_URI", "value": "http://authorization-server:9000/oauth2/token" },
+            { "name": "OIDC_JWK_SET_URI", "value": "http://authorization-server:9000/oauth2/jwks" },
+            { "name": "INTERESTS_SERVICE_BASE_URL", "value": "http://interests-service:8084" },
+            { "name": "FEATURE_USE_INTERESTS_SERVICE", "value": "true" },
+            { "name": "TLS_KEYSTORE_PATH", "value": "file:/certs/keystore.p12" }
+          ],
+          "secrets": [
+            { "name": "CORE_SERVICE_CREDENTIAL", "valueFrom": "xyz-bank/bff-web/CORE_SERVICE_CREDENTIAL" },
+            { "name": "TLS_KEYSTORE_PASSWORD", "valueFrom": "xyz-bank/bff-web/TLS_KEYSTORE_PASSWORD" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-bff-mobile",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "imageBuild": {
+        "context": ".",
+        "dockerfile": "bff/bff-mobile/Dockerfile"
+      },
+      "containerDefinitions": [
+        {
+          "name": "bff-mobile",
+          "image": "xyz-bank-bff-mobile",
+          "portMappings": [
+            { "containerPort": 8082, "hostPort": 8082, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1:8082/actuator/health | grep -q UP"],
+            "interval": 10,
+            "timeout": 5,
+            "retries": 20,
+            "startPeriod": 30
+          },
+          "environment": [
+            { "name": "CONFIG_SERVER_URL", "value": "http://config-server:8888" },
+            { "name": "EUREKA_CLIENT_ENABLED", "value": "true" },
+            { "name": "EUREKA_SERVER_URL", "value": "http://eureka-server:8761" },
+            { "name": "CORE_SERVICE_BASE_URL", "value": "http://core-service" },
+            { "name": "TLS_KEYSTORE_PATH", "value": "file:/certs/keystore.p12" }
+          ],
+          "secrets": [
+            { "name": "CORE_SERVICE_CREDENTIAL", "valueFrom": "xyz-bank/bff-mobile/CORE_SERVICE_CREDENTIAL" },
+            { "name": "TLS_KEYSTORE_PASSWORD", "valueFrom": "xyz-bank/bff-mobile/TLS_KEYSTORE_PASSWORD" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-bff-atm",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "imageBuild": {
+        "context": ".",
+        "dockerfile": "bff/bff-atm/Dockerfile"
+      },
+      "containerDefinitions": [
+        {
+          "name": "bff-atm",
+          "image": "xyz-bank-bff-atm",
+          "portMappings": [
+            { "containerPort": 8083, "hostPort": 8083, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "curl -sk --cert-type P12 --cert /certs/terminal-keystore.p12:\"$TLS_KEYSTORE_PASSWORD\" https://127.0.0.1:8083/actuator/health | grep -q UP"],
+            "interval": 10,
+            "timeout": 5,
+            "retries": 20,
+            "startPeriod": 30
+          },
+          "environment": [
+            { "name": "CONFIG_SERVER_URL", "value": "http://config-server:8888" },
+            { "name": "EUREKA_CLIENT_ENABLED", "value": "true" },
+            { "name": "EUREKA_SERVER_URL", "value": "http://eureka-server:8761" },
+            { "name": "CORE_SERVICE_BASE_URL", "value": "http://core-service" },
+            { "name": "CORE_SERVICE_PIN_VERIFICATION_BASE_URL", "value": "https://core-service:8453" },
+            { "name": "TLS_KEYSTORE_PATH", "value": "file:/certs/keystore.p12" },
+            { "name": "TLS_TRUSTSTORE_PATH", "value": "file:/certs/truststore.p12" }
+          ],
+          "secrets": [
+            { "name": "CORE_SERVICE_CREDENTIAL", "valueFrom": "xyz-bank/bff-atm/CORE_SERVICE_CREDENTIAL" },
+            { "name": "TLS_KEYSTORE_PASSWORD", "valueFrom": "xyz-bank/bff-atm/TLS_KEYSTORE_PASSWORD" },
+            { "name": "TLS_TRUSTSTORE_PASSWORD", "valueFrom": "xyz-bank/bff-atm/TLS_TRUSTSTORE_PASSWORD" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "xyz-bank-gateway",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "imageBuild": {
+        "context": ".",
+        "dockerfile": "platform/gateway/Dockerfile"
+      },
+      "containerDefinitions": [
+        {
+          "name": "gateway",
+          "image": "xyz-bank-gateway",
+          "portMappings": [
+            { "containerPort": 8090, "hostPort": 8090, "protocol": "tcp" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/actuator/health | grep -q UP"],
+            "interval": 10,
+            "timeout": 5,
+            "retries": 20,
+            "startPeriod": 30
+          },
+          "environment": [
+            { "name": "BFF_WEB_BASE_URL", "value": "https://bff-web:8081" },
+            { "name": "BFF_MOBILE_BASE_URL", "value": "https://bff-mobile:8082" },
+            { "name": "BFF_ATM_BASE_URL", "value": "https://bff-atm:8083" }
+          ]
+        }
+      ]
+    }
+  ]
+}

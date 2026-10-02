@@ -2,6 +2,7 @@ package cl.duoc.xyzbank.coredomain.accounts.unit;
 
 import cl.duoc.xyzbank.coredomain.accounts.domain.entities.Account;
 import cl.duoc.xyzbank.coredomain.accounts.domain.repositories.AccountRepository;
+import cl.duoc.xyzbank.coredomain.accounts.domain.valueobjects.AccountNumber;
 import cl.duoc.xyzbank.coredomain.shared.domain.Id;
 
 import java.util.List;
@@ -28,6 +29,13 @@ public class InMemoryAccountRepository implements AccountRepository {
     @Override
     public Optional<Account> findById(Id id) {
         return Optional.ofNullable(accounts.get(id.getValue()));
+    }
+
+    @Override
+    public Optional<Account> findByAccountNumber(AccountNumber accountNumber) {
+        return accounts.values().stream()
+                .filter(account -> account.getAccountNumber().equals(accountNumber))
+                .findFirst();
     }
 
     @Override

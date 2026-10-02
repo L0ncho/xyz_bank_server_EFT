@@ -8,8 +8,8 @@ import java.util.Map;
 public final class Customer {
 
     private final Id id;
-    private final String fullName;
-    private final String email;
+    private String fullName;
+    private String email;
 
     private Customer(Id id, String fullName, String email) {
         this.id = id;
@@ -37,6 +37,12 @@ public final class Customer {
 
     public String getEmail() {
         return email;
+    }
+
+    public void updateProfile(String fullName, String email) {
+        Customer validated = create(id, fullName, email);
+        this.fullName = validated.fullName;
+        this.email = validated.email;
     }
 
     public Map<String, Object> toPrimitives() {

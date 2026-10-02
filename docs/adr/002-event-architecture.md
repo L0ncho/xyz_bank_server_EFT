@@ -74,3 +74,19 @@ El retiro ATM sigue siendo síncrono: `bff-atm` → `POST /internal/accounts/{id
 En un crédito de interés exitoso (camino Kafka), `InterestCreditApplied` y `TransactionConfirmed` se escriben en la misma transacción de PostgreSQL. El relay enruta por `event_type`: resultados de interés a `interests.credit-results`, confirmaciones a `transactions.confirmed`.
 
 La publicación de `TransactionConfirmed` se controla con `FEATURE_TRANSACTION_CONFIRMED_EVENTS` / `app.events.transaction-confirmed.enabled`, independiente de `FEATURE_INTEREST_CREDIT_VIA_KAFKA`. No se implementan consumidores de negocio (reportes, anomalías) en esta fase.
+
+## Extensión: security.alerts
+
+Cuando la verificación de PIN bloquea una tarjeta que estaba desbloqueada, `core-service` inserta `CardBlocked` en el mismo outbox. El relay lo publica en el tópico `security.alerts`, con clave de mensaje `cardId`. El mensaje no incluye el PIN. Las respuestas 200, 401 y 423 de la verificación no cambian.
+
+Contrato del evento `CardBlocked` (`schemaVersion` 1):
+
+| Campo | Descripción |
+|---|---|
+| `eventId` | `{cardId}:blocked` |
+| `eventType` | `CardBlocked` |
+| `schemaVersion` | `1` |
+| `cardId` | Tarjeta bloqueada |
+| `occurredAt` | Fecha del bloqueo |
+
+La publicación se controla con `FEATURE_SECURITY_ALERTS` / `app.events.security-alerts.enabled`, independiente de la saga de intereses y de `FEATURE_TRANSACTION_CONFIRMED_EVENTS`. El default de la aplicación es `false`. En Compose queda en `true`. Con la flag encendida, `core-service` también consume `security.alerts` (grupo `core-service-security-alerts`) y registra la alerta.

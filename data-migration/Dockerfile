@@ -12,7 +12,7 @@ FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 COPY --from=build /src/data-migration/target/xyz-bank-data-migration-0.0.1-SNAPSHOT-exec.jar app.jar
 COPY data-migration/data /app/data
-ENV MIGRATION_DAILY_TRANSACTIONS=file:/app/data/semana_3/transacciones.csv
-ENV MIGRATION_MONTHLY_INTERESTS=file:/app/data/semana_3/intereses.csv
-ENV MIGRATION_ANNUAL_ACCOUNTS=file:/app/data/semana_3/cuentas_anuales.csv
+ENV MIGRATION_DAILY_TRANSACTIONS=file:/app/data/legacy/movimientos_financieros_diarios.csv
+ENV MIGRATION_MONTHLY_INTERESTS=file:/app/data/legacy/intereses_trimestrales.csv
+ENV MIGRATION_ANNUAL_ACCOUNTS=file:/app/data/legacy/estados_financieros_anuales.csv
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

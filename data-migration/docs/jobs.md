@@ -49,11 +49,23 @@ Parámetros en `application.yml`:
 
 BackOff fijo en código: `ExponentialBackOffPolicy` (initial 1000 ms, multiplier 2.0, max 10000 ms) entre reintentos JDBC.
 
+## CSV por defecto
+
+`application.yml` apunta a los archivos oficiales:
+
+| Job | CSV por defecto |
+|---|---|
+| `dailyTransactionsJob` | `data/legacy/movimientos_financieros_diarios.csv` |
+| `monthlyInterestsJob` | `data/legacy/intereses_trimestrales.csv` |
+| `annualGenerationJob` | `data/legacy/estados_financieros_anuales.csv` |
+
+Los tests existentes conservan otras rutas. `TheDailyTransactionsJobTest`, `TheMonthlyInterestsJobTest`, `TheAnnualGenerationJobTest` y `src/test/resources/application.yml` leen `data/semana_2/transacciones.csv`, `data/semana_2/intereses.csv` y `data/semana_2/cuentas_anuales.csv`. `TheRunAllMigrationsRunnerTest` lee `data/semana_3/transacciones.csv`, `data/semana_3/intereses.csv` y `data/semana_3/cuentas_anuales.csv`.
+
 ## dailyTransactionsJob
 
 | Elemento | Valor |
 |---|---|
-| CSV | `data/semana_3/transacciones.csv` (default) |
+| CSV | `data/legacy/movimientos_financieros_diarios.csv` (por defecto) |
 | Guard | `checkDailyMigrationNotDone` |
 | Process | `processDailyTransactions` |
 | Puerto | `DailyReportWriter` → `JdbcDailyReportWriter` |
@@ -78,7 +90,7 @@ La anomalía `HIGH_AMOUNT` (monto > 2000) se registra en el reporte y el ítem *
 
 | Elemento | Valor |
 |---|---|
-| CSV | `data/semana_3/intereses.csv` |
+| CSV | `data/legacy/intereses_trimestrales.csv` |
 | Guard | `checkMonthlyMigrationNotDone` |
 | Process | `calculateMonthlyInterests` |
 | Puerto | `AccountBalanceWriter` → `JdbcAccountBalanceWriter` |
@@ -102,7 +114,7 @@ Otras omisiones: `saldo` vacío o ≤ 0, `edad` vacía o fuera de 18–100, `nom
 
 | Elemento | Valor |
 |---|---|
-| CSV | `data/semana_3/cuentas_anuales.csv` |
+| CSV | `data/legacy/estados_financieros_anuales.csv` |
 | Guard | `checkAnnualMigrationNotDone` |
 | Process | `compileAnnualAudit` |
 | Puerto | `AnnualAuditWriter` → `JdbcAnnualAuditWriter` |
