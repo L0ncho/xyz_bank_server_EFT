@@ -6,6 +6,7 @@ import cl.duoc.xyzbank.sharedsecurity.callercontext.CallerIdentityException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -27,7 +28,16 @@ public class BffExceptionHandler {
 
     @ExceptionHandler(CoreServiceCallException.class)
     public ProblemDetail handleCoreServiceCall(CoreServiceCallException exception) {
-        return ProblemDetail.forStatusAndDetail(
-                HttpStatusCode.valueOf(exception.getStatus()), exception.getMessage());
+        HttpStatusCode status = HttpStatusCode.valueOf(exception.getStatus());
+        if (exception.getStatus() == HttpStatus.UNAUTHORIZED.value()
+                || exception.getStatus() == HttpStatus.LOCKED.value()) {
+            return ProblemDetail.forStatusAndDetail(status, "PIN verification failed");
+        }
+        return ProblemDetail.forStatusAndDetail(status, exception.getMessage());
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ProblemDetail handleInvalidRequest(MethodArgumentNotValidException exception) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Request is invalid");
     }
 }

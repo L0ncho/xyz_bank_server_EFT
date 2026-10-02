@@ -14,6 +14,7 @@ import cl.duoc.xyzbank.coredomain.transactions.domain.repositories.TransactionRe
 import cl.duoc.xyzbank.coredomain.transactions.domain.valueobjects.TransactionType;
 import cl.duoc.xyzbank.coreservice.interests.application.dto.CreditInterestRequest;
 import cl.duoc.xyzbank.coreservice.interests.application.dto.InterestCreditRejected;
+import cl.duoc.xyzbank.coreservice.interests.application.dto.InterestCreditReversed;
 import cl.duoc.xyzbank.coreservice.interests.application.dto.InterestCreditResponse;
 import cl.duoc.xyzbank.coreservice.interests.application.ports.InterestCreditResultPublisher;
 
@@ -243,6 +244,10 @@ public class CreditInterestUseCase {
 
         @Override
         public void reject(InterestCreditRejected rejection) {
+        }
+
+        @Override
+        public void reverse(InterestCreditReversed reversal) {
         }
     }
 }

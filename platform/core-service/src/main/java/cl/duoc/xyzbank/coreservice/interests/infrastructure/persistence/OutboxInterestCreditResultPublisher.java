@@ -1,6 +1,7 @@
 package cl.duoc.xyzbank.coreservice.interests.infrastructure.persistence;
 
 import cl.duoc.xyzbank.coreservice.interests.application.dto.InterestCreditRejected;
+import cl.duoc.xyzbank.coreservice.interests.application.dto.InterestCreditReversed;
 import cl.duoc.xyzbank.coreservice.interests.application.ports.InterestCreditResultPublisher;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -35,6 +36,27 @@ public class OutboxInterestCreditResultPublisher implements InterestCreditResult
                 UUID.fromString(rejection.accountId()),
                 periodOf(rejection.eventId()),
                 rejection.reason());
+    }
+
+    @Override
+    @Transactional
+    public void reverse(InterestCreditReversed reversal) {
+        jdbcTemplate.update(
+                """
+                INSERT INTO outbox_events (
+                    id, event_id, event_type, schema_version, account_id, period,
+                    amount, currency, occurred_on)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                UUID.randomUUID(),
+                reversal.eventId(),
+                "InterestCreditReversed",
+                1,
+                UUID.fromString(reversal.accountId()),
+                reversal.year(),
+                reversal.amount(),
+                reversal.currency(),
+                java.time.LocalDate.now());
     }
 
     private int periodOf(String eventId) {

@@ -47,6 +47,16 @@ management:
     circuitbreakers:
       enabled: true
 
+resilience4j:
+  circuitbreaker:
+    instances:
+      interestEventProcessing:
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+
 logging:
   pattern:
     console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %5p [%X{correlationId}] [%15.15t] %-40.40logger{39} : %m%n"
@@ -56,3 +66,5 @@ interests:
     enabled: ${FEATURE_INTEREST_CREDIT_VIA_KAFKA:false}
     calculated-topic: interests.calculated
     credit-results-topic: interests.credit-results
+    listener-retry-interval-ms: 1000
+    listener-max-retries: 3

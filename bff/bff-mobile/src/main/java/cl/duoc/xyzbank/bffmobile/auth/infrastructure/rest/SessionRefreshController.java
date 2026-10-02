@@ -11,6 +11,8 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+
+import jakarta.validation.Valid;
 import org.springframework.web.client.RestClient;
 
 /**
@@ -30,7 +32,7 @@ public class SessionRefreshController {
     }
 
     @PostMapping("/session/refresh")
-    public MobileSessionResponse refresh(@RequestBody MobileRefreshRequest request) {
+    public MobileSessionResponse refresh(@Valid @RequestBody MobileRefreshRequest request) {
         RefreshTokenResponse refreshTokenResponse = CoreServiceCalls.fetch(() -> coreServiceClient
                 .post()
                 .uri("/internal/auth/mobile/devices/{deviceId}/refresh-tokens", request.deviceId())

@@ -123,7 +123,10 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
+      config-server:
+        condition: service_healthy
     environment:
+      CONFIG_SERVER_URL: http://config-server:8888
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: core_service
@@ -235,6 +238,7 @@ services:
       authorization-server:
         condition: service_healthy
     environment:
+      CONFIG_SERVER_URL: http://config-server:8888
       CORE_SERVICE_BASE_URL: http://core-service:8080
       OIDC_AUTHORIZATION_URI: http://localhost:9000/oauth2/authorize
       OIDC_TOKEN_URI: http://authorization-server:9000/oauth2/token
@@ -264,6 +268,7 @@ services:
       core-service:
         condition: service_healthy
     environment:
+      CONFIG_SERVER_URL: http://config-server:8888
       CORE_SERVICE_BASE_URL: http://core-service:8080
       CORE_SERVICE_CREDENTIAL: dev-service-credential-mobile
       TLS_KEYSTORE_PATH: file:/certs/keystore.p12
@@ -290,6 +295,7 @@ services:
       core-service:
         condition: service_healthy
     environment:
+      CONFIG_SERVER_URL: http://config-server:8888
       CORE_SERVICE_BASE_URL: http://core-service:8080
       CORE_SERVICE_PIN_VERIFICATION_BASE_URL: https://core-service:8453
       CORE_SERVICE_CREDENTIAL: dev-service-credential-atm

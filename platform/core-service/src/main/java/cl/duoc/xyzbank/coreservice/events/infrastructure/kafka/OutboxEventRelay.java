@@ -28,7 +28,8 @@ public class OutboxEventRelay {
     private static final String TRANSACTION_CONFIRMED = "TransactionConfirmed";
     private static final Set<String> INTEREST_CREDIT_RESULTS = Set.of(
             "InterestCreditApplied",
-            "InterestCreditRejected");
+            "InterestCreditRejected",
+            "InterestCreditReversed");
 
     private final JdbcTemplate jdbcTemplate;
     private final KafkaTemplate<String, String> kafkaTemplate;
@@ -116,7 +117,7 @@ public class OutboxEventRelay {
                     accountId,
                     creditResultsTopic,
                     new InterestCreditResultMessage(
-                            eventId,
+                            publishedEventId(eventId, eventType),
                             eventType,
                             row.getInt("schema_version"),
                             accountId,
@@ -134,6 +135,14 @@ public class OutboxEventRelay {
                 eventType,
                 eventId);
         return null;
+    }
+
+    private String publishedEventId(String eventId, String eventType) {
+        String reversalSuffix = ":reversed";
+        if ("InterestCreditReversed".equals(eventType) && eventId.endsWith(reversalSuffix)) {
+            return eventId.substring(0, eventId.length() - reversalSuffix.length());
+        }
+        return eventId;
     }
 
     private record PendingOutboxEvent(

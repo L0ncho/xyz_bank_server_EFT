@@ -11,14 +11,15 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+
+import jakarta.validation.Valid;
 import org.springframework.web.client.RestClient;
 
 /**
  * Verifies a card PIN against core-service's TLS-only PIN-verification endpoint and, on
  * success, issues a 120-second ATM session bound to the terminal's mTLS certificate (design.md
- * Decision 8). core-service's incorrect/locked responses (401/423) already carry no body and no
- * distinguishing detail beyond the status code (no card-existence oracle), so they are left to
- * propagate as-is via {@link CoreServiceCalls#fetch} -- this controller never inspects or logs
+ * Decision 8). core-service answers 401 and 423 with the same generic problem detail, so the
+ * response does not reveal whether the card exists. This controller never inspects or logs
  * the submitted PIN.
  */
 @RestController
@@ -35,7 +36,7 @@ public class PinVerificationController {
     }
 
     @PostMapping("/pin-verifications")
-    public AtmSessionResponse verify(@RequestBody PinVerificationRequest request, @TerminalIdentity String terminalId) {
+    public AtmSessionResponse verify(@Valid @RequestBody PinVerificationRequest request, @TerminalIdentity String terminalId) {
         CorePinVerificationResponse response = CoreServiceCalls.fetch(() -> corePinVerificationClient
                 .post()
                 .uri("/internal/auth/atm/pin-verifications")

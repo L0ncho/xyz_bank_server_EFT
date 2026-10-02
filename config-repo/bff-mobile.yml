@@ -1,0 +1,4 @@
+core-service:
+  base-url: ${CORE_SERVICE_BASE_URL:http://localhost:8080}
+  connect-timeout-ms: 3000
+  read-timeout-ms: 3000

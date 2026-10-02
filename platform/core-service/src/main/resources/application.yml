@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: core-service
+  config:
+    import: optional:configserver:${CONFIG_SERVER_URL:http://localhost:8888}
   cloud:
     compatibility-verifier:
       enabled: false
@@ -47,6 +49,8 @@ interests:
     enabled: ${FEATURE_INTEREST_CREDIT_VIA_KAFKA:false}
     calculated-topic: interests.calculated
     credit-results-topic: interests.credit-results
+    listener-retry-interval-ms: 1000
+    listener-max-retries: 3
 
 eureka:
   client:
@@ -86,6 +90,16 @@ management:
   endpoint:
     health:
       show-details: never
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      interestEventProcessing:
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
 
 logging:
   pattern:

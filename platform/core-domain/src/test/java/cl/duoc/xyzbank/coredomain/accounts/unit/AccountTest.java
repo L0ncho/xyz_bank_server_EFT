@@ -31,6 +31,8 @@ class AccountTest {
      * 10. Withdraw rejects an amount whose currency does not match the account's balance currency
      * 11. Credit increases the balance by the credited amount
      * 12. Credit rejects an amount whose currency does not match the account's balance currency
+     * 13. Reversing a credit lowers the balance and leaves the daily withdrawal usage unchanged
+     * 14. Reversing a credit rejects an amount that would make the balance negative
      */
 
     @Test
@@ -210,5 +212,36 @@ class AccountTest {
 
         assertEquals(DomainException.Type.VALIDATION, exception.getType());
         assertEquals(new BigDecimal("500.00"), account.getBalance().getAmount());
+    }
+
+    @Test
+    @DisplayName("reversing a credit lowers the balance and leaves the daily withdrawal usage unchanged")
+    void reversingACreditLowersTheBalanceAndLeavesTheDailyWithdrawalUsageUnchanged() {
+        Money balance = Money.create(new BigDecimal("500.00"), "USD");
+        Account account = Account.create(
+                Id.generate(), AccountNumber.create("1234567890"), Id.generate(), balance);
+        Money withdrawal = Money.create(new BigDecimal("40.00"), "USD");
+        Money dailyLimit = Money.create(new BigDecimal("1000.00"), "USD");
+        account.withdraw(withdrawal, LocalDate.of(2026, 1, 1), dailyLimit);
+
+        account.reverseCredit(Money.create(new BigDecimal("35.00"), "USD"));
+
+        assertEquals(new BigDecimal("425.00"), account.getBalance().getAmount());
+        assertEquals(new BigDecimal("40.00"), account.getDailyWithdrawnAmount().getAmount());
+    }
+
+    @Test
+    @DisplayName("reversing a credit rejects an amount that would make the balance negative")
+    void reversingACreditRejectsAnAmountThatWouldMakeTheBalanceNegative() {
+        Money balance = Money.create(new BigDecimal("10.00"), "USD");
+        Account account = Account.create(
+                Id.generate(), AccountNumber.create("1234567890"), Id.generate(), balance);
+
+        DomainException exception = assertThrows(
+                DomainException.class,
+                () -> account.reverseCredit(Money.create(new BigDecimal("35.00"), "USD")));
+
+        assertEquals(DomainException.Type.VALIDATION, exception.getType());
+        assertEquals(new BigDecimal("10.00"), account.getBalance().getAmount());
     }
 }

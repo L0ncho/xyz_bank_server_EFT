@@ -5,6 +5,7 @@ import cl.duoc.xyzbank.sharedsecurity.callercontext.CallerIdentityException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -23,5 +24,10 @@ public class BffExceptionHandler {
     public ProblemDetail handleCoreServiceCall(CoreServiceCallException exception) {
         return ProblemDetail.forStatusAndDetail(
                 HttpStatusCode.valueOf(exception.getStatus()), exception.getMessage());
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ProblemDetail handleInvalidRequest(MethodArgumentNotValidException exception) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Request is invalid");
     }
 }

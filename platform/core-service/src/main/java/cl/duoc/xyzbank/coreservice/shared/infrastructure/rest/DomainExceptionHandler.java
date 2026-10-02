@@ -3,6 +3,7 @@ package cl.duoc.xyzbank.coreservice.shared.infrastructure.rest;
 import cl.duoc.xyzbank.coredomain.shared.domain.DomainException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -19,5 +20,10 @@ public class DomainExceptionHandler {
         };
 
         return ProblemDetail.forStatusAndDetail(status, exception.getMessage());
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ProblemDetail handleInvalidRequest(MethodArgumentNotValidException exception) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Request is invalid");
     }
 }

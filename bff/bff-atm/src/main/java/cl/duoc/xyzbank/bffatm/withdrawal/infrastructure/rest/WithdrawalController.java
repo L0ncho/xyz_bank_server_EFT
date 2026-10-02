@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import jakarta.validation.Valid;
+
 @RestController
 public class WithdrawalController {
 
@@ -25,7 +27,7 @@ public class WithdrawalController {
     public WithdrawalResponse withdraw(
             @PathVariable String accountId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody WithdrawalRequest request) {
+            @Valid @RequestBody WithdrawalRequest request) {
         return withdrawalUseCase.execute(accountId, request, idempotencyKey);
     }
 }

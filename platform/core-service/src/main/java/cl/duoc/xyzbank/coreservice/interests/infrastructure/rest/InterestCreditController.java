@@ -11,6 +11,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
 
 @RestController
@@ -26,7 +30,7 @@ public class InterestCreditController {
     public ResponseEntity<InterestCreditResponse> credit(
             @PathVariable String accountId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody InterestCreditBody body) {
+            @Valid @RequestBody InterestCreditBody body) {
         InterestCreditResponse response = creditInterestUseCase.execute(new CreditInterestRequest(
                 accountId,
                 body.year(),
@@ -40,11 +44,11 @@ public class InterestCreditController {
     }
 
     public record InterestCreditBody(
-            int year,
-            BigDecimal amount,
-            String currency,
-            BigDecimal interestRate,
-            BigDecimal openingBalance,
-            BigDecimal closingBalance) {
+            @Min(1) int year,
+            @NotNull BigDecimal amount,
+            @NotBlank String currency,
+            @NotNull BigDecimal interestRate,
+            @NotNull BigDecimal openingBalance,
+            @NotNull BigDecimal closingBalance) {
     }
 }

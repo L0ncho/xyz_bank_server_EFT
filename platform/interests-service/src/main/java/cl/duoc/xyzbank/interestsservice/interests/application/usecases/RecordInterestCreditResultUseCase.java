@@ -15,7 +15,15 @@ public class RecordInterestCreditResultUseCase {
 
     public void execute(InterestCreditResult result) {
         InterestCalculation calculation = calculations.findByEventId(result.eventId()).orElse(null);
-        if (calculation == null || calculation.isClosed()) {
+        if (calculation == null) {
+            return;
+        }
+        if (result.status() == InterestCalculationStatus.REVERSED) {
+            calculation.reverse();
+            calculations.save(calculation);
+            return;
+        }
+        if (calculation.isClosed()) {
             return;
         }
         if (result.status() == InterestCalculationStatus.APPLIED) {

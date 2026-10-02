@@ -1,4 +1,6 @@
 package cl.duoc.xyzbank.bffmobile.auth.infrastructure.rest.dto;
 
-public record MobileRefreshRequest(String deviceId, String refreshToken) {
+import jakarta.validation.constraints.NotBlank;
+
+public record MobileRefreshRequest(@NotBlank String deviceId, @NotBlank String refreshToken) {
 }

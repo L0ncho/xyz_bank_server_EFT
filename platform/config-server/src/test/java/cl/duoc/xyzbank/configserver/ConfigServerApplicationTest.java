@@ -72,4 +72,18 @@ class ConfigServerApplicationTest {
                 response.getBody().contains("coreServiceInterests"),
                 "unknown apps must not receive interests-service resilience settings: " + response.getBody());
     }
+
+    @Test
+    @DisplayName("serves core-service topics and does not give them to an unknown application")
+    void servesCoreServiceTopicsAndDoesNotGiveThemToAnUnknownApplication() {
+        ResponseEntity<String> core = restTemplate.getForEntity("/core-service/default", String.class);
+        ResponseEntity<String> unknown = restTemplate.getForEntity("/unknown-semana6-app/default", String.class);
+
+        assertEquals(HttpStatus.OK, core.getStatusCode());
+        assertNotNull(core.getBody());
+        assertTrue(core.getBody().contains("interests.calculated"), core.getBody());
+        assertTrue(core.getBody().contains("interestEventProcessing"), core.getBody());
+        assertNotNull(unknown.getBody());
+        assertFalse(unknown.getBody().contains("interestEventProcessing"), unknown.getBody());
+    }
 }

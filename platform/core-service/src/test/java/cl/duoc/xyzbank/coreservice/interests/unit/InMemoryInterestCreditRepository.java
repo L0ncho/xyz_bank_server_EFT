@@ -33,4 +33,10 @@ public class InMemoryInterestCreditRepository implements InterestCreditRepositor
         transactionRepository.save(transaction);
         interestSummaryRepository.save(summary);
     }
+
+    @Override
+    public void persistInterestReversal(Account account, Transaction transaction) {
+        accountRepository.save(account);
+        transactionRepository.save(transaction);
+    }
 }

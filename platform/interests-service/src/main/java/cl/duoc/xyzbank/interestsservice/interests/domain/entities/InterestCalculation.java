@@ -50,6 +50,13 @@ public final class InterestCalculation {
         this.reason = reason;
     }
 
+    public void reverse() {
+        if (status != InterestCalculationStatus.APPLIED) {
+            return;
+        }
+        this.status = InterestCalculationStatus.REVERSED;
+    }
+
     public boolean isClosed() {
         return status != InterestCalculationStatus.PENDING;
     }

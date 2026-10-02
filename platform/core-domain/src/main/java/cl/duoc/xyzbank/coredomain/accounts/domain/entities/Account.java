@@ -85,6 +85,10 @@ public final class Account {
         this.balance = this.balance.add(amount);
     }
 
+    public void reverseCredit(Money amount) {
+        this.balance = this.balance.subtract(amount);
+    }
+
     public Map<String, Object> toPrimitives() {
         return Map.of(
                 "id", id.getValue(),

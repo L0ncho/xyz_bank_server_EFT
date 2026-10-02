@@ -60,6 +60,13 @@ public class JpaInterestCreditRepository implements InterestCreditRepository {
                 transaction.getOccurredOn()));
     }
 
+    @Override
+    @Transactional
+    public void persistInterestReversal(Account account, Transaction transaction) {
+        accountRepository.save(account);
+        transactionRepository.save(transaction);
+    }
+
     private void persistCredit(Account account, Transaction transaction, AnnualInterestSummary summary) {
         try {
             accountRepository.save(account);

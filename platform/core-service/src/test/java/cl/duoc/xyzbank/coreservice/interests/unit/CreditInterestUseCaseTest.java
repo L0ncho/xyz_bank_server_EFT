@@ -280,8 +280,20 @@ class CreditInterestUseCaseTest {
     }
 
     private InterestCreditRepository failingInterestCreditRepository() {
-        return (account, transaction, summary) -> {
-            throw new IllegalStateException("database unavailable");
+        return new InterestCreditRepository() {
+            @Override
+            public void persistInterestCredit(
+                    cl.duoc.xyzbank.coredomain.accounts.domain.entities.Account account,
+                    cl.duoc.xyzbank.coredomain.transactions.domain.entities.Transaction transaction,
+                    cl.duoc.xyzbank.coredomain.interests.domain.entities.AnnualInterestSummary summary) {
+                throw new IllegalStateException("database unavailable");
+            }
+
+            @Override
+            public void persistInterestReversal(
+                    cl.duoc.xyzbank.coredomain.accounts.domain.entities.Account account,
+                    cl.duoc.xyzbank.coredomain.transactions.domain.entities.Transaction transaction) {
+            }
         };
     }
 

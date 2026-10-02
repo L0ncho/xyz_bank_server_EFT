@@ -11,6 +11,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
 
 @RestController
@@ -26,12 +29,12 @@ public class WithdrawalController {
     public ResponseEntity<WithdrawalResponse> withdraw(
             @PathVariable String accountId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody WithdrawBody body) {
+            @Valid @RequestBody WithdrawBody body) {
         WithdrawalResponse response = withdrawAccountUseCase.execute(
                 new WithdrawRequest(accountId, body.amount(), body.currency(), idempotencyKey));
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
-    public record WithdrawBody(BigDecimal amount, String currency) {
+    public record WithdrawBody(@NotNull BigDecimal amount, @NotBlank String currency) {
     }
 }

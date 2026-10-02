@@ -1,0 +1,14 @@
+resilience4j:
+  circuitbreaker:
+    instances:
+      coreServiceWeb:
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+  retry:
+    instances:
+      coreServiceWeb:
+        maxAttempts: 3
+        waitDuration: 200ms

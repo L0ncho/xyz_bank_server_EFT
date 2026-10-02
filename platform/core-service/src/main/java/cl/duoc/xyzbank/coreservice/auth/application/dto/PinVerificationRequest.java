@@ -1,4 +1,6 @@
 package cl.duoc.xyzbank.coreservice.auth.application.dto;
 
-public record PinVerificationRequest(String cardNumber, String pin) {
+import jakarta.validation.constraints.NotBlank;
+
+public record PinVerificationRequest(@NotBlank String cardNumber, @NotBlank String pin) {
 }
