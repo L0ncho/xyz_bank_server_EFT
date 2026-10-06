@@ -1,0 +1,213 @@
+openapi: 3.0.3
+info:
+  title: bff-mobile
+  description: >
+    Mobile channel backend-for-frontend. Returns a small, flattened account
+    summary with a fixed page of recent transactions. Does not access any
+    database. The native client authenticates with a device-bound JWT
+    (Authorization: Bearer) plus an X-Device-Id header that must match the
+    device the token was issued for; a session is obtained via an OIDC login
+    redirect and renewed via /session/refresh.
+  version: "1.0.0"
+servers:
+  - url: https://localhost:8082
+security:
+  - DeviceBearer: []
+paths:
+  /oauth2/authorization/oidc:
+    get:
+      summary: Start the OIDC login redirect
+      description: >
+        Browser/native-webview redirect flow: redirects to the identity
+        provider's authorization endpoint (PKCE-enabled). The deviceId query
+        parameter is captured before the redirect and carried through to the
+        callback. On successful login, /login/oauth2/code/oidc registers the
+        device with core-service and returns the tokens as JSON (not a
+        cookie, unlike bff-web) -- see its response below.
+      operationId: startOidcLogin
+      security: []
+      parameters:
+        - name: deviceId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to the identity provider
+  /login/oauth2/code/oidc:
+    get:
+      summary: OIDC login callback
+      description: >
+        Handled internally by the OIDC client after the identity provider
+        redirects back. Mints a device-bound session JWT and registers the
+        device with core-service to obtain its first refresh token, both
+        returned directly to the client.
+      operationId: completeOidcLogin
+      security: []
+      responses:
+        '200':
+          description: Login succeeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileSessionResponse'
+        '400':
+          description: The deviceId captured at login initiation is missing from the session
+  /session/refresh:
+    post:
+      summary: Rotate the device-bound session and refresh token
+      operationId: refreshSession
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MobileRefreshRequest'
+      responses:
+        '200':
+          description: A new session token and refresh token, bound to the same device
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileSessionResponse'
+        '404':
+          description: Unknown refresh token, or presented against a different device than it was issued for
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: The device has been revoked
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /devices/{deviceId}/revocations:
+    post:
+      summary: Revoke a device
+      description: >
+        A device may only revoke itself: the path deviceId must match the
+        caller's own authenticated device (from its bearer token/X-Device-Id
+        pair). Revoking one device does not affect any other device
+        registered to the same customer.
+      operationId: revokeDevice
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: The device is revoked
+        '403':
+          description: The path deviceId does not match the caller's own device
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /accounts/{accountId}/summary:
+    get:
+      summary: Account summary
+      operationId: getAccountSummary
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Flattened balance plus a fixed-size list of recent transactions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountSummaryResponse'
+        '403':
+          description: Caller channel is not mobile
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: Unknown account
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '422':
+          description: Missing bearer token, or a device identifier that does not match the token's bound device
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+components:
+  securitySchemes:
+    DeviceBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        HS256 JWT bound to a device identifier at issuance. Every request
+        must also carry an X-Device-Id header equal to that bound device id;
+        a mismatch is rejected identically to a missing token.
+  schemas:
+    MobileSessionResponse:
+      type: object
+      required: [sessionToken, refreshToken, refreshTokenExpiry]
+      properties:
+        sessionToken:
+          type: string
+        refreshToken:
+          type: string
+        refreshTokenExpiry:
+          type: string
+          format: date-time
+    MobileRefreshRequest:
+      type: object
+      required: [deviceId, refreshToken]
+      properties:
+        deviceId:
+          type: string
+        refreshToken:
+          type: string
+    AccountSummaryResponse:
+      type: object
+      required: [balance, currency, transactions]
+      properties:
+        balance:
+          type: number
+        currency:
+          type: string
+        transactions:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/RecentTransaction'
+    RecentTransaction:
+      type: object
+      required: [id, type, amount, occurredOn]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [DEBIT, CREDIT]
+        amount:
+          type: number
+        occurredOn:
+          type: string
+          format: date
+    ProblemDetail:
+      type: object
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string

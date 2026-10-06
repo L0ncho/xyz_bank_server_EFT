@@ -1,0 +1,73 @@
+server:
+  port: 8082
+  ssl:
+    enabled: true
+    key-store: ${TLS_KEYSTORE_PATH:classpath:tls/keystore.p12}
+    key-store-password: ${TLS_KEYSTORE_PASSWORD:xyzbank-dev}
+    key-store-type: PKCS12
+  compression:
+    enabled: true
+
+spring:
+  application:
+    name: bff-mobile
+  config:
+    import: optional:configserver:${CONFIG_SERVER_URL:http://localhost:8888}
+  cloud:
+    compatibility-verifier:
+      enabled: false
+    loadbalancer:
+      enabled: ${EUREKA_CLIENT_ENABLED:false}
+  security:
+    oauth2:
+      client:
+        registration:
+          oidc:
+            client-id: ${OIDC_CLIENT_ID:xyz-bank-mobile-dev}
+            client-authentication-method: none
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: openid,profile,email
+        provider:
+          oidc:
+            authorization-uri: ${OIDC_AUTHORIZATION_URI:http://localhost:9999/mock-oidc/authorize}
+            token-uri: ${OIDC_TOKEN_URI:http://localhost:9999/mock-oidc/token}
+            jwk-set-uri: ${OIDC_JWK_SET_URI:http://localhost:9999/mock-oidc/jwks}
+            user-name-attribute: sub
+
+eureka:
+  client:
+    enabled: ${EUREKA_CLIENT_ENABLED:false}
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761}/eureka/
+    register-with-eureka: false
+    fetch-registry: true
+
+core-service:
+  base-url: ${CORE_SERVICE_BASE_URL:http://localhost:8080}
+  connect-timeout-ms: 3000
+  read-timeout-ms: 3000
+  service-credential: ${CORE_SERVICE_CREDENTIAL:dev-service-credential-mobile}
+
+channel-auth:
+  jwt:
+    secret: ${CHANNEL_AUTH_JWT_SECRET:dev-channel-auth-jwt-signing-secret-please-rotate-in-prod}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %5p [%X{correlationId}] [%15.15t] %-40.40logger{39} : %m%n"
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
