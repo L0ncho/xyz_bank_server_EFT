@@ -51,7 +51,7 @@ BackOff fijo en código: `ExponentialBackOffPolicy` (initial 1000 ms, multiplier
 
 ## CSV por defecto
 
-`application.yml` apunta a los archivos oficiales:
+`application.yml` apunta a los archivos oficiales. Los tres CSV de `data/legacy/` son idénticos a los de `data/semana_3/` del repositorio del caso, [KariVillagran/fin_legacy_data](https://github.com/KariVillagran/fin_legacy_data):
 
 | Job | CSV por defecto |
 |---|---|
@@ -193,6 +193,26 @@ Tabla `migration_executions` (`job_name`, `status`, `executed_at`, `write_count`
 Los jobs usan `RunIdIncrementer`: cada `spring-boot:run` crea una nueva instancia Batch y siempre pasa por el guard.
 
 Para volver a migrar: ejecutar [`scripts/revert-migration.sql`](../scripts/revert-migration.sql). Ver [mysql.md](mysql.md).
+
+## Resultado con los archivos oficiales
+
+Corrida de `docker compose up --build` del 10-10-2026 (`SELECT job_name, status, write_count, skip_count FROM migration_executions`). Cada CSV tiene 1000 filas de datos; filas escritas + omitidas = 1000 en los tres jobs, así que ninguna fila se pierde sin quedar registrada:
+
+| Job | Estado | Filas escritas | Filas omitidas (inválidas o duplicadas) | Filas en la tabla de reporte |
+|---|---|---|---|---|
+| `dailyTransactionsJob` | SUCCESS | 378 | 622 | 378 en `daily_transaction_reports` |
+| `monthlyInterestsJob` | SUCCESS | 50 | 950 | 50 en `account_balances` |
+| `annualGenerationJob` | SUCCESS | 859 movimientos | 141 | 20 cuentas consolidadas en `annual_audit_reports` |
+
+## Reejecución automática ante fallos críticos
+
+Con `MIGRATION_RUN_ALL=true` (el modo de Compose), `RunAllMigrationsRunner` lanza los tres jobs en orden: `dailyTransactionsJob`, `monthlyInterestsJob` y `annualGenerationJob`.
+
+1. Si un job termina `FAILED`, el runner lo reinicia **una vez** con `JobOperator.restart`. Spring Batch retoma la misma instancia del job desde el último chunk confirmado, en una ejecución nueva.
+2. Si el reinicio termina `COMPLETED`, sigue con el siguiente job.
+3. Si el reinicio vuelve a fallar, el runner lanza una excepción y el proceso termina con código distinto de 0. En Compose, `core-service` espera `service_completed_successfully` de `data-migration`, así que la plataforma no arranca sobre una migración incompleta.
+
+Los errores de datos no llegan a este punto: se omiten con `DomainSkipPolicy`. Los errores transitorios de base de datos se reintentan antes con `TransientDataAccessRetryPolicy` y backoff exponencial. El reinicio cubre lo que queda: fallos que agotan los reintentos o superan el `skip-limit`.
 
 ## Cómo encaja la arquitectura
 

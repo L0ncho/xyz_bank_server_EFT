@@ -334,6 +334,8 @@ services:
     container_name: xyz-bank-gateway
     ports:
       - "8090:8090"
+    volumes:
+      - ./dev/certs/ca.crt:/certs/ca.crt:ro
     depends_on:
       bff-web:
         condition: service_healthy
@@ -345,6 +347,7 @@ services:
       BFF_WEB_BASE_URL: https://bff-web:8081
       BFF_MOBILE_BASE_URL: https://bff-mobile:8082
       BFF_ATM_BASE_URL: https://bff-atm:8083
+      TLS_TRUSTED_CA_PATH: file:/certs/ca.crt
     healthcheck:
       test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:8090/actuator/health | grep -q UP"]
       interval: 10s

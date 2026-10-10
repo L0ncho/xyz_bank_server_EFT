@@ -2,7 +2,23 @@
 
 El descriptor está en [`deploy/aws/ecs-task-definition.json`](deploy/aws/ecs-task-definition.json). Cubre los servicios de `docker-compose.yml`. Cada elemento de `taskDefinitions` es una familia ECS con `networkMode` `awsvpc` y `requiresCompatibilities` `FARGATE`.
 
-`imageBuild` indica cómo construir la imagen en este repositorio. Al registrar la familia se usan `family` y `containerDefinitions` (imagen, puerto, health check, `environment` y `secrets`). El valor de cada secreto queda fuera del descriptor: aquí solo figura la referencia `valueFrom`.
+`imageBuild` indica cómo construir la imagen en este repositorio; no es un campo de AWS y se quita al registrar. Al registrar la familia se usan `family` y `containerDefinitions` (imagen, puerto, health check, `environment` y `secrets`). El valor de cada secreto queda fuera del descriptor: aquí solo figura la referencia `valueFrom`.
+
+## Herramientas y recursos necesarios
+
+- AWS CLI v2 configurada (`aws configure`) con una cuenta y región, por ejemplo `us-east-1`.
+- Docker para construir las imágenes y `jq` para extraer cada familia del descriptor.
+- En AWS:
+  - **ECR**: un repositorio por imagen propia.
+  - **Secrets Manager**: los secretos que nombra cada `valueFrom`.
+  - **IAM**: un rol de ejecución de tareas (`ecsTaskExecutionRole`) con `AmazonECSTaskExecutionRolePolicy` y permiso `secretsmanager:GetSecretValue`.
+  - **VPC**: subredes privadas para los servicios internos y públicas para el balanceador; un security group que permita el tráfico entre servicios.
+  - **ECS**: un clúster Fargate.
+  - **Cloud Map**: un namespace privado `xyz-bank.local` para que los servicios se encuentren por nombre (`mysql`, `postgres`, `kafka`, `config-server`, `eureka-server`, `core-service`, etc.), igual que en Compose.
+  - **ALB**: un Application Load Balancer público delante del `gateway` (puerto 8090).
+  - **EFS** (o imágenes propias): los certificados de `dev/certs` y el `config-repo/` que en Compose se montan como volúmenes.
+
+En producción, MySQL y PostgreSQL se recomiendan en **Amazon RDS** y Kafka en **Amazon MSK**, en lugar de contenedores Fargate sin almacenamiento persistente.
 
 ## Construir las imágenes
 
@@ -39,6 +55,35 @@ docker build -f platform/gateway/Dockerfile -t xyz-bank-gateway .
 
 Publica cada imagen en el registro que vaya a leer ECS y registra la familia con ese URI en `image`.
 
+## Publicar las imágenes en ECR
+
+```bash
+AWS_REGION=us-east-1
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REGISTRY=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $REGISTRY
+
+for IMAGE in xyz-bank-data-migration xyz-bank-config-server xyz-bank-eureka-server \
+             xyz-bank-authorization-server xyz-bank-core-service xyz-bank-interests-service \
+             xyz-bank-bff-web xyz-bank-bff-mobile xyz-bank-bff-atm xyz-bank-gateway; do
+  aws ecr create-repository --repository-name $IMAGE --region $AWS_REGION 2>/dev/null || true
+  docker tag $IMAGE:latest $REGISTRY/$IMAGE:latest
+  docker push $REGISTRY/$IMAGE:latest
+done
+```
+
+## Crear los secretos
+
+Un secreto por cada `valueFrom` del descriptor. Ejemplo:
+
+```bash
+aws secretsmanager create-secret --name xyz-bank/postgres/POSTGRES_PASSWORD --secret-string '<contraseña>'
+aws secretsmanager create-secret --name xyz-bank/core-service/DB_PASSWORD --secret-string '<contraseña>'
+```
+
+Al registrar, cada `valueFrom` se reemplaza por el ARN completo del secreto (`arn:aws:secretsmanager:<región>:<cuenta>:secret:xyz-bank/...`).
+
 ## Registrar cada familia
 
 Por cada objeto de `taskDefinitions`, registra una task definition con la `family`, el `networkMode`, `requiresCompatibilities` y el `containerDefinitions` de ese objeto. En el contenedor deja el `name`, la imagen, `portMappings`, `healthCheck`, `environment` y `secrets` que el JSON ya trae. `kafka-init` además lleva `entryPoint` y `command`.
@@ -61,6 +106,67 @@ Familias, en el orden del JSON:
 12. `xyz-bank-bff-mobile`
 13. `xyz-bank-bff-atm`
 14. `xyz-bank-gateway`
+
+Con AWS CLI, cada familia se extrae del descriptor con `jq` y se registra. Fargate exige además `cpu`, `memory` y `executionRoleArn`, que se agregan en el mismo paso:
+
+```bash
+EXECUTION_ROLE_ARN=arn:aws:iam::$ACCOUNT_ID:role/ecsTaskExecutionRole
+
+for FAMILY in $(jq -r '.taskDefinitions[].family' deploy/aws/ecs-task-definition.json); do
+  jq --arg f "$FAMILY" --arg role "$EXECUTION_ROLE_ARN" --arg reg "$REGISTRY" '
+    .taskDefinitions[] | select(.family == $f) | del(.imageBuild)
+    | .cpu = "512" | .memory = "1024" | .executionRoleArn = $role
+    | .containerDefinitions |= map(if (.image | startswith("xyz-bank-")) then .image = ($reg + "/" + .image + ":latest") else . end)
+  ' deploy/aws/ecs-task-definition.json > /tmp/$FAMILY.json
+  aws ecs register-task-definition --cli-input-json file:///tmp/$FAMILY.json
+done
+```
+
+Antes de ejecutarlo, reemplaza cada `valueFrom` por el ARN de su secreto (ver «Crear los secretos»).
+
+## Crear el clúster y los servicios
+
+```bash
+aws ecs create-cluster --cluster-name xyz-bank
+aws servicediscovery create-private-dns-namespace --name xyz-bank.local --vpc <vpc-id>
+```
+
+Por cada familia de larga duración se crea un servicio ECS registrado en Cloud Map con el nombre que usan las variables (`mysql`, `postgres`, `kafka`, `config-server`, `eureka-server`, `authorization-server`, `core-service`, `interests-service`, `bff-web`, `bff-mobile`, `bff-atm`, `gateway`). Ejemplo para `core-service`:
+
+```bash
+aws ecs create-service --cluster xyz-bank --service-name core-service \
+  --task-definition xyz-bank-core-service --desired-count 2 --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[<subnet-privada>],securityGroups=[<sg>],assignPublicIp=DISABLED}" \
+  --service-registries "registryArn=<arn-del-servicio-cloud-map-core-service>"
+```
+
+`data-migration` y `kafka-init` no son servicios: se ejecutan una vez con `aws ecs run-task` después de que MySQL y Kafka estén sanos. El orden de arranque es el mismo que en Compose: bases de datos y Kafka → `data-migration` y `kafka-init` → `config-server` → `eureka-server` y `authorization-server` → `core-service` → `interests-service` → BFF → `gateway`.
+
+El `gateway` se crea con `--load-balancers "targetGroupArn=<tg-arn>,containerName=gateway,containerPort=8090"` para quedar detrás del ALB público. El resto de los servicios queda en subredes privadas.
+
+## Escalado horizontal
+
+Los BFF, `interests-service` y `core-service` no guardan estado en memoria entre peticiones (el estado vive en PostgreSQL y en los tokens), así que se pueden ejecutar varias tareas de cada uno:
+
+- `--desired-count` fija cuántas tareas corren de cada servicio.
+- Los BFF y `interests-service` llaman a `core-service` por nombre de servicio con Spring Cloud LoadBalancer (`@LoadBalanced`) y Eureka, que reparte las llamadas entre las instancias registradas.
+- El ALB reparte el tráfico entre las tareas del `gateway`.
+- El consumo de Kafka escala hasta el número de particiones de cada tópico: para más de un consumidor por grupo hay que crear los tópicos con más particiones (en `kafka-init` hoy es 1).
+
+Auto scaling por CPU, ejemplo para `bff-web`:
+
+```bash
+aws application-autoscaling register-scalable-target --service-namespace ecs \
+  --resource-id service/xyz-bank/bff-web --scalable-dimension ecs:service:DesiredCount \
+  --min-capacity 2 --max-capacity 6
+
+aws application-autoscaling put-scaling-policy --service-namespace ecs \
+  --resource-id service/xyz-bank/bff-web --scalable-dimension ecs:service:DesiredCount \
+  --policy-name bff-web-cpu --policy-type TargetTrackingScaling \
+  --target-tracking-scaling-policy-configuration '{"TargetValue":60.0,"PredefinedMetricSpecification":{"PredefinedMetricType":"ECSServiceAverageCPUUtilization"}}'
+```
+
+En Docker Compose local no se escala con `--scale` porque cada servicio tiene `container_name` y puerto de host fijos; el escalado horizontal se aplica en ECS.
 
 ### xyz-bank-mysql
 
@@ -293,5 +399,6 @@ Health check: `wget -qO- http://127.0.0.1:8090/actuator/health | grep -q UP`. In
 | `BFF_WEB_BASE_URL` | `https://bff-web:8081` |
 | `BFF_MOBILE_BASE_URL` | `https://bff-mobile:8082` |
 | `BFF_ATM_BASE_URL` | `https://bff-atm:8083` |
+| `TLS_TRUSTED_CA_PATH` | `file:/certs/ca.crt` |
 
-Sin `secrets`. En el puerto 8090 el gateway enruta `/web` hacia `bff-web`, `/mobile` hacia `bff-mobile` y `/atm` hacia `bff-atm`.
+Sin `secrets`. En el puerto 8090 el gateway enruta `/web` hacia `bff-web`, `/mobile` hacia `bff-mobile` y `/atm` hacia `bff-atm`. `TLS_TRUSTED_CA_PATH` apunta al certificado de la CA que firma los certificados de los BFF; el gateway lo usa para confiar en ellos al reenviar por HTTPS.

@@ -434,7 +434,8 @@
           "environment": [
             { "name": "BFF_WEB_BASE_URL", "value": "https://bff-web:8081" },
             { "name": "BFF_MOBILE_BASE_URL", "value": "https://bff-mobile:8082" },
-            { "name": "BFF_ATM_BASE_URL", "value": "https://bff-atm:8083" }
+            { "name": "BFF_ATM_BASE_URL", "value": "https://bff-atm:8083" },
+            { "name": "TLS_TRUSTED_CA_PATH", "value": "file:/certs/ca.crt" }
           ]
         }
       ]

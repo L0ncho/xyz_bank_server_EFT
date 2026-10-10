@@ -4,9 +4,13 @@ XYZ Bank expone tres backends por canal (BFF) delante de una plataforma interna:
 
 ## Topología
 
-Un `gateway` escucha en el puerto **8090** y queda delante de los tres BFF. Enruta `/web` hacia `bff-web`, `/mobile` hacia `bff-mobile` y `/atm` hacia `bff-atm`, y quita ese prefijo antes de reenviar. Cada canal prueba quién llama con una credencial real, no con una cabecera de confianza: cookie de sesión OAuth2/OIDC en web, JWT ligado al dispositivo en mobile, y mTLS más una sesión verificada por PIN en ATM. Todo borde de cara al cliente va por TLS. El borde BFF → plataforma sigue en HTTP plano, salvo la única llamada que lleva el PIN en claro, que es solo TLS por diseño.
+Un `gateway` escucha en el puerto **8090** y queda delante de los tres BFF. Enruta `/web` hacia `bff-web`, `/mobile` hacia `bff-mobile` y `/atm` hacia `bff-atm`, y quita ese prefijo antes de reenviar. Cada canal prueba quién llama con una credencial real, no con una cabecera de confianza: cookie de sesión OAuth2/OIDC en web, JWT ligado al dispositivo en mobile, y mTLS más una sesión verificada por PIN en ATM. Los tres BFF sirven TLS hacia el cliente; el `gateway` escucha en HTTP en desarrollo y reenvía por HTTPS a `bff-web` y `bff-mobile`, confiando en la CA de desarrollo que firma sus certificados (`TLS_TRUSTED_CA_PATH`). El cajero se conecta directo a `bff-atm`, porque ese canal autentica al terminal con su propio certificado de cliente (mTLS). El borde BFF → plataforma sigue en HTTP plano, salvo la única llamada que lleva el PIN en claro, que es solo TLS por diseño.
 
 `core-service` abre, cierra y mantiene cuentas, acepta depósitos, transferencias y pagos externos, y actualiza el nombre y el correo del cliente. El GET de saldo no cambia. Una cuenta cerrada no acepta movimientos. El retiro del ATM tampoco cambia.
+
+Gestión de cuentas, gestión de clientes y procesamiento de pagos son servicios de dominio separados dentro de `core-service`: cada uno tiene sus casos de uso, controladores y repositorios (paquetes `accounts` y `payments`, con el dominio en `core-domain`). Se despliegan juntos porque un depósito o una transferencia debe modificar saldo, movimiento y outbox en una sola transacción de PostgreSQL. `interests-service` muestra el camino de extracción a un proceso propio (Config Server, Eureka, LoadBalancer, Resilience4j y Kafka); el mismo camino aplica a cuentas, clientes y pagos cuando se acepte consistencia eventual entre ellos.
+
+Resiliencia de las llamadas HTTP salientes: `interests-service` → `core-service` (resumen, saldo y crédito) y el historial de transacciones de `bff-web` usan circuit breaker y retry de Resilience4j, con fallback en `interests-service`. Las demás llamadas de los BFF a `core-service` tienen timeouts de conexión y lectura de 3 s.
 
 `bff-web` enruta el tráfico de resumen de intereses a `interests-service` (la flag está encendida por defecto). Mobile y ATM siguen hablando con `core-service` directo. `interests-service` carga la configuración desde `config-server`, se registra en Eureka, descubre `core-service` por id de servicio (LoadBalancer) y envuelve las llamadas HTTP salientes a core con un circuit breaker de Resilience4j. El GET del resumen anual de intereses sigue síncrono y reenvía el bearer del usuario. La acreditación de intereses se queda en ese camino HTTP mientras `FEATURE_INTEREST_CREDIT_VIA_KAFKA` es `false` (el default): `interests-service` se autentica con su credencial de servicio y el scope JWT `interests:write`. Con la flag en `true`, el mismo cálculo se publica como `InterestCalculated` y `core-service` acredita la cuenta y luego publica el resultado. Registro de la decisión: [`docs/adr/002-event-architecture.md`](adr/002-event-architecture.md).
 
@@ -32,6 +36,7 @@ flowchart LR
     ConfigServer[config-server]
     EurekaServer[eureka-server]
     InterestsService[interests-service]
+    AuthServer[authorization-server OAuth2]
   end
 
   CoreService[core-service]
@@ -41,12 +46,10 @@ flowchart LR
   MySQL[(MySQL 8.4)]
   Migration[data-migration una sola ejecución]
 
-  WebClient -- HTTPS --> Gateway
-  MobileClient -- HTTPS --> Gateway
-  AtmClient -- HTTPS --> Gateway
-  Gateway -- "/web" --> BffWeb
-  Gateway -- "/mobile" --> BffMobile
-  Gateway -- "/atm" --> BffAtm
+  WebClient -- HTTP --> Gateway
+  MobileClient -- HTTP --> Gateway
+  Gateway -- "/web HTTPS" --> BffWeb
+  Gateway -- "/mobile HTTPS" --> BffMobile
   WebClient -- HTTPS --> BffWeb
   MobileClient -- HTTPS --> BffMobile
   AtmClient -- HTTPS + mTLS --> BffAtm
@@ -63,7 +66,10 @@ flowchart LR
   Kafka -- "InterestCalculated" --> CoreService
   CoreService -- "resultado del crédito" --> Kafka
   Kafka -- "resultado del crédito" --> InterestsService
+  CoreService -- "TransactionConfirmed" --> Kafka
   CoreService -- "security.alerts" --> Kafka
+  BffWeb -- "OIDC login" --> AuthServer
+  CoreService -- "JWKS" --> AuthServer
   CoreService --> Postgres
   CoreServicePin -.-> CoreService
   Migration --> MySQL
@@ -71,7 +77,7 @@ flowchart LR
 
 El conector de verificación de PIN de `core-service` (`CoreServicePin` arriba) es un segundo conector Tomcat del mismo servicio, no un artefacto aparte: comparte el proceso y el acceso a base de datos de `core-service`. Se dibuja aparte solo para mostrar que ese conector termina TLS, mientras el resto de los endpoints de `core-service` siguen en HTTP plano.
 
-Lo que no cambia según el canal: un BFF por canal, `core-service` como único dueño de la base de las entidades bancarias, MySQL reservado a los reportes de migración, y los contratos de payload que ya tenían los BFF. Qué prueba la credencial de cada canal y cómo se valida está en `docs/contracts/*/openapi.yaml`. Kafka coordina el crédito de intereses cuando la flag está encendida. No es dueño del estado de la cuenta. `security.alerts` avisa el bloqueo de una tarjeta; tampoco mueve saldo.
+Lo que no cambia según el canal: un BFF por canal, `core-service` como único dueño de la base de las entidades bancarias, MySQL reservado a los reportes de migración, y los contratos de payload que ya tenían los BFF. Qué prueba la credencial de cada canal y cómo se valida está en `docs/contracts/*/openapi.yaml`. Kafka coordina el crédito de intereses cuando la flag está encendida. No es dueño del estado de la cuenta. `security.alerts` avisa el bloqueo de una tarjeta; tampoco mueve saldo. Hoy `core-service` consume `security.alerts` para registrar cada alerta; `transactions.confirmed` queda publicado para consumidores futuros (auditoría, notificaciones, analítica) sin cambiar el productor.
 
 ## Flujos de intereses
 

@@ -8,6 +8,9 @@ spring:
     compatibility-verifier:
       enabled: false
     gateway:
+      httpclient:
+        ssl:
+          trusted-x509-certificates: ${TLS_TRUSTED_CA_PATH:classpath:tls/ca.crt}
       routes:
         - id: bff-web
           uri: ${BFF_WEB_BASE_URL:https://localhost:8081}

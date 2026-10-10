@@ -4,9 +4,32 @@ Repositorio: https://github.com/L0ncho/xyz_bank_server_EFT
 
 Plataforma BFF de XYZ Bank: tres backends por canal (`bff-web`, `bff-mobile`, `bff-atm`) frente a un `core-service` interno y un `interests-service` extraído (con `config-server` y `eureka-server`), más un job de migración CSV hacia MySQL.
 
-**Autenticación y HTTPS están implementadas con configuración de desarrollo.** Cada canal se autentica con una credencial real — cookie de sesión (web), JWT de dispositivo (mobile), o certificado mTLS del terminal más un PIN de tarjeta (ATM) — pero todo el material de confianza es de dev/test: un proveedor OIDC simulado (mock, ver `platform/*/src/test/.../MockOidcProvider`), un secreto de firma de sesión fijo, credenciales de servicio por BFF fijas, y una CA de desarrollo autofirmada (`scripts/generate-dev-tls-certs.sh`). Antes de un despliegue real hace falta: un IdP externo real, una CA gestionada que emita certificados reales, y credenciales de servicio rotadas por BFF.
+**Autenticación y HTTPS están implementadas con configuración de desarrollo.** Cada canal se autentica con una credencial real — cookie de sesión (web), JWT de dispositivo (mobile), o certificado mTLS del terminal más un PIN de tarjeta (ATM) — pero todo el material de confianza es de dev/test: un `authorization-server` (Spring Authorization Server) con un usuario y clientes de desarrollo, un proveedor OIDC simulado para los tests (mock, ver `platform/*/src/test/.../MockOidcProvider`), un secreto de firma de sesión fijo, credenciales de servicio por BFF fijas, y una CA de desarrollo autofirmada (`scripts/generate-dev-tls-certs.sh`). Antes de un despliegue real hace falta: un IdP externo real, una CA gestionada que emita certificados reales, y credenciales de servicio rotadas por BFF.
 
-El login de `bff-web`/`bff-mobile` pasa por ese proveedor OIDC simulado, que solo existe como fixture de test (WireMock, arrancado por los propios tests) — no corre como servicio dentro de `docker compose up`. Por eso los ejemplos de `curl` de este README no incluyen el login completo de web/mobile: se pueden ejercitar levantando ese fixture vía los tests (`mvn test` en `bff-web`/`bff-mobile`), o conectando un proveedor OIDC real. El flujo de ATM (verificación de PIN) no depende de ningún proveedor externo y sí es 100% ejecutable contra el stack de `docker compose`, como se muestra más abajo.
+En `docker compose up`, `bff-web` apunta al `authorization-server` (puerto 9000) como proveedor OIDC. `bff-mobile` no recibe esa configuración en Compose y conserva el proveedor simulado, que solo existe como fixture de test (WireMock, arrancado por los propios tests). El login completo de web/mobile es un flujo de navegador/app con redirecciones, por eso los ejemplos de `curl` de este README no lo incluyen: se ejercita con los tests (`mvn test` en `bff-web`/`bff-mobile`). El flujo de ATM (verificación de PIN) no depende de ningún proveedor externo y sí es 100% ejecutable contra el stack de `docker compose`, como se muestra más abajo.
+
+## Resumen ejecutivo
+
+El Banco XYZ operaba sobre un sistema legacy en COBOL y scripts Shell en mainframe. Este proyecto lo migra a una arquitectura de microservicios preparada para la nube, respondiendo a tres requerimientos del negocio: **escalabilidad** (cada pieza crece por separado), **resiliencia** (una falla no tumba el sistema completo) y **seguridad por canal** (web, móvil y cajero con protección distinta).
+
+La migración se organiza en cinco procesos:
+
+| Proceso | Implementación en este repositorio |
+|---|---|
+| 1. Migración de procesos batch a Spring Batch | `data-migration`: `dailyTransactionsJob`, `monthlyInterestsJob`, `annualGenerationJob` |
+| 2. División del monolito en microservicios | `core-service` (cuentas, clientes, pagos), `interests-service`, más `config-server` y `eureka-server` |
+| 3. Patrón Backend for Frontend | `bff-web`, `bff-mobile`, `bff-atm`, detrás del `gateway` |
+| 4. Seguridad distribuida (Spring Security / OAuth2) | `authorization-server`, JWT con scopes en `core-service`, cookie OIDC, JWT de dispositivo, mTLS + PIN |
+| 5. Mensajería asíncrona con Apache Kafka | Tópicos `interests.calculated`, `interests.credit-results`, `transactions.confirmed`, `security.alerts` con outbox transaccional |
+
+| Aspecto | Sistema legacy | Sistema nuevo |
+|---|---|---|
+| Informes batch | Procesos COBOL/Shell secuenciales en mainframe | Jobs Spring Batch por chunks, 3 hilos, skip/retry y reinicio automático |
+| Canales | Web, móvil y cajero contra un backend monolítico, mismos datos para todos | Un BFF por canal con respuesta y credencial propias |
+| Tolerancia a fallos | Una falla en un módulo afecta todo | Servicios separados, circuit breaker y fallback con Resilience4j |
+| Seguridad | Centralizada | OAuth2/JWT con scopes, HTTPS, mTLS en cajero, PIN solo por TLS |
+| Integración | Acoplada | Eventos en Kafka con outbox transaccional |
+| Despliegue | Servidores mainframe | Contenedores Docker (Compose en local, ECS Fargate en AWS) |
 
 ## Prerrequisitos
 
@@ -16,7 +39,7 @@ El login de `bff-web`/`bff-mobile` pasa por ese proveedor OIDC simulado, que sol
 
 ## Topología del proyecto
 
-Cada canal prueba la identidad del llamante con una credencial real en vez de una cabecera de confianza: cookie de sesión OAuth2/OIDC para web, JWT de dispositivo para mobile, y mTLS más una sesión verificada por PIN para ATM. Todo borde de cara al cliente es TLS; el borde BFF→plataforma sigue siendo HTTP plano salvo la única llamada que transporta un PIN, que es TLS-only por diseño. `bff-web` enruta el resumen de intereses a `interests-service` (flag `FEATURE_USE_INTERESTS_SERVICE`, default `true`). El GET de resumen sigue siendo síncrono: `interests-service` reenvía el Bearer del usuario a `core-service`. La acreditación anual, con `FEATURE_INTEREST_CREDIT_VIA_KAFKA` en `false` (default), sigue siendo el POST HTTP con scope `interests:write`. Con la flag en `true`, `interests-service` publica `InterestCalculated` y `core-service` responde por `interests.credit-results` (saga coreografiada; ver [`docs/adr/002-event-architecture.md`](docs/adr/002-event-architecture.md)).
+Cada canal prueba la identidad del llamante con una credencial real en vez de una cabecera de confianza: cookie de sesión OAuth2/OIDC para web, JWT de dispositivo para mobile, y mTLS más una sesión verificada por PIN para ATM. Los tres BFF sirven TLS hacia el cliente; el `gateway` (8090) escucha en HTTP en desarrollo y reenvía por HTTPS a `bff-web` y `bff-mobile` confiando en la CA de desarrollo (`TLS_TRUSTED_CA_PATH`). El cajero se conecta directo a `bff-atm`, porque ese canal autentica al terminal con su propio certificado (mTLS). El borde BFF→plataforma sigue siendo HTTP plano salvo la única llamada que transporta un PIN, que es TLS-only por diseño. `bff-web` enruta el resumen de intereses a `interests-service` (flag `FEATURE_USE_INTERESTS_SERVICE`, default `true`). El GET de resumen sigue siendo síncrono: `interests-service` reenvía el Bearer del usuario a `core-service`. La acreditación anual, con `FEATURE_INTEREST_CREDIT_VIA_KAFKA` en `false` (default), sigue siendo el POST HTTP con scope `interests:write`. Con la flag en `true`, `interests-service` publica `InterestCalculated` y `core-service` responde por `interests.credit-results` (saga coreografiada; ver [`docs/adr/002-event-architecture.md`](docs/adr/002-event-architecture.md)).
 
 El `gateway` escucha en el puerto 8090 y enruta `/web`, `/mobile` y `/atm`. Con `EUREKA_CLIENT_ENABLED=true` los tres BFF llaman a `http://core-service` y `register-with-eureka` es `false`. Sin esa variable mantienen `http://localhost:8080`. `core-service` también abre, cierra y mantiene cuentas, acepta depósitos, transferencias y pagos externos, y actualiza el perfil del cliente. El PIN sigue en el conector TLS 8453.
 
@@ -49,12 +72,10 @@ flowchart LR
   MySQL[(MySQL 8.4)]
   Migration[data-migration one-shot]
 
-  WebClient -- HTTPS --> Gateway
-  MobileClient -- HTTPS --> Gateway
-  AtmClient -- HTTPS --> Gateway
-  Gateway -- "/web" --> BffWeb
-  Gateway -- "/mobile" --> BffMobile
-  Gateway -- "/atm" --> BffAtm
+  WebClient -- HTTP --> Gateway
+  MobileClient -- HTTP --> Gateway
+  Gateway -- "/web HTTPS" --> BffWeb
+  Gateway -- "/mobile HTTPS" --> BffMobile
   WebClient -- HTTPS --> BffWeb
   MobileClient -- HTTPS --> BffMobile
   AtmClient -- HTTPS + mTLS --> BffAtm
@@ -250,6 +271,8 @@ mvn verify
 
 Los ITs de PostgreSQL/MySQL usan Testcontainers. Sin Docker se omiten (`disabledWithoutDocker`) en lugar de fallar.
 
+Resultado de referencia de `mvn verify` con Docker activo: **724 pruebas, 0 fallos, `BUILD SUCCESS`** en los 13 módulos.
+
 ## Troubleshooting
 
 - **Puertos 3306 o 5432 ocupados.** Otro MySQL/Postgres local está usando el puerto. Para este stack esos puertos deben estar libres, o para el stack con `docker compose down` (eso no apaga bases de otros proyectos).
@@ -258,5 +281,7 @@ Los ITs de PostgreSQL/MySQL usan Testcontainers. Sin Docker se omiten (`disabled
 - **La migración falló y core-service no arranca.** Compose espera `service_completed_successfully`. Revisa `docker compose logs data-migration`.
 - **PostgreSQL cae con el stack ya arriba.** `GET http://localhost:8080/actuator/health` deja de reportar UP (Actuator incluye el datasource). Los BFFs no tienen base propia: su health sigue UP aunque Postgres esté caído.
 - **Testcontainers skipped.** Arranca Docker Desktop y vuelve a `mvn verify`.
+- **`mvn verify` falla en `core-service` con `Could not find a valid Docker environment` y `Status 400` (Docker Engine 29 o superior).** Testcontainers 1.21 pide una versión de la API de Docker que Docker 29 ya no acepta. Crea el archivo `~/.docker-java.properties` con la línea `api.version=1.44` y vuelve a ejecutar `mvn verify`.
+- **`mvn verify` falla en `core-service` con `Address already in use` en el puerto 8453.** El stack de `docker compose` está corriendo y ocupa ese puerto, que las pruebas del conector de PIN también usan. Detén el stack con `docker compose stop`, ejecuta `mvn verify` y vuelve a levantarlo con `docker compose up -d`.
 - **Solo quieres experimentar el job CSV.** Sigue usando [`data-migration/docker-compose.yml`](data-migration/docker-compose.yml) (MySQL aislado). El camino soportado de plataforma completa es el Compose de la raíz.
 - **`curl` falla el handshake TLS contra `bff-atm` con un certificado de cliente (`error:...SSL routines:ST_CONNECT:tlsv1 alert protocol version` o similar).** El `curl`/LibreSSL que trae macOS de fábrica tiene problemas negociando TLS con certificados de cliente P12 contra este stack. Instala una build de `curl` enlazada con OpenSSL (p. ej. `brew install curl`) o usa `openssl s_client` para depurar la conexión.

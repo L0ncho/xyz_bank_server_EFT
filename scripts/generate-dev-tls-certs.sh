@@ -120,5 +120,8 @@ copy_module_tls "bff/bff-mobile" "bff-mobile"
 copy_module_tls "bff/bff-atm" "bff-atm"
 cp "${CERTS_DIR}/atm-terminal/keystore.p12" "${ROOT_DIR}/bff/bff-atm/src/test/resources/tls/terminal-keystore.p12"
 copy_module_tls "platform/core-service" "core-service"
+mkdir -p "${ROOT_DIR}/platform/gateway/src/test/resources/tls"
+cp "${CERTS_DIR}/ca.crt" "${ROOT_DIR}/platform/gateway/src/test/resources/tls/ca.crt"
+cp "${CERTS_DIR}/bff-web/keystore.p12" "${ROOT_DIR}/platform/gateway/src/test/resources/tls/keystore.p12"
 
 echo "== Done. Dev CA and certificates are under ${CERTS_DIR} (dev/test use only). =="

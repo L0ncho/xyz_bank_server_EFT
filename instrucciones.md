@@ -7,6 +7,7 @@ Desde la raíz del repositorio se levanta el stack y se prueba cada componente c
 - Java 21
 - Docker Desktop (o un daemon Docker compatible) con Compose v2
 - Maven 3.9+ (o el wrapper del módulo de migración si se usa de forma aislada)
+- `curl` y `jq` para los ejemplos
 
 ## Certificados TLS de desarrollo
 
@@ -110,6 +111,8 @@ docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server loca
 
 `kafka-init` crea `interests.calculated`, `interests.credit-results`, `transactions.confirmed` y `security.alerts`.
 
+El panel de Eureka está en `http://localhost:8761` y muestra los servicios registrados (`CORE-SERVICE`, `INTERESTS-SERVICE`).
+
 ## Gateway :8090
 
 El gateway escucha en el puerto 8090. Quita el primer segmento y reenvía `/web` a `bff-web` :8081, `/mobile` a `bff-mobile` :8082 y `/atm` a `bff-atm` :8083.
@@ -126,15 +129,16 @@ curl -sS "http://localhost:8090/web/accounts/22222222-2222-2222-2222-22222222222
 curl -sS http://localhost:8090/mobile/accounts/22222222-2222-2222-2222-222222222222/summary \
   -H "Authorization: Bearer $DEVICE_TOKEN" \
   -H "X-Device-Id: $DEVICE_ID"
-
-TERMINAL_CERT="dev/certs/atm-terminal/keystore.p12:xyzbank-dev"
-
-curl -sS --cacert dev/certs/ca.crt \
-  --cert-type P12 --cert "$TERMINAL_CERT" \
-  -X POST http://localhost:8090/atm/pin-verifications \
-  -H "Content-Type: application/json" \
-  -d '{"cardNumber":"77777777-7777-7777-7777-777777777777","pin":"1234"}'
 ```
+
+El gateway reenvía por HTTPS confiando en la CA de desarrollo (`TLS_TRUSTED_CA_PATH`, montada desde `dev/certs/ca.crt`). Comprobación rápida de que llega a cada BFF:
+
+```bash
+curl -sS http://localhost:8090/web/actuator/health
+curl -sS http://localhost:8090/mobile/actuator/health
+```
+
+El cajero se conecta directo a `bff-atm` (sección siguiente), porque ese canal autentica al terminal con su propio certificado de cliente (mTLS).
 
 ## bff-atm :8083
 
@@ -255,6 +259,8 @@ mvn verify
 
 Los ITs de PostgreSQL/MySQL usan Testcontainers. Sin Docker se omiten (`disabledWithoutDocker`) en lugar de fallar.
 
+Resultado esperado de `mvn verify` con Docker activo: **724 pruebas, 0 fallos, `BUILD SUCCESS`** en los 13 módulos.
+
 ## Si algo falla
 
 - **Puertos 3306 o 5432 ocupados.** Otro MySQL/Postgres local está usando el puerto. Para este stack esos puertos deben estar libres, o para el stack con `docker compose down` (eso no apaga bases de otros proyectos).
@@ -263,5 +269,7 @@ Los ITs de PostgreSQL/MySQL usan Testcontainers. Sin Docker se omiten (`disabled
 - **La migración falló y core-service no arranca.** Compose espera `service_completed_successfully`. Revisa `docker compose logs data-migration`.
 - **PostgreSQL cae con el stack ya arriba.** `GET http://localhost:8080/actuator/health` deja de reportar UP (Actuator incluye el datasource). Los BFFs no tienen base propia: su health sigue UP aunque Postgres esté caído.
 - **Testcontainers skipped.** Arranca Docker Desktop y vuelve a `mvn verify`.
+- **`mvn verify` falla en `core-service` con `Could not find a valid Docker environment` y `Status 400` (Docker Engine 29 o superior).** Testcontainers 1.21 pide una versión de la API de Docker que Docker 29 ya no acepta. Crea el archivo `~/.docker-java.properties` con la línea `api.version=1.44` y vuelve a ejecutar `mvn verify`.
+- **`mvn verify` falla en `core-service` con `Address already in use` en el puerto 8453.** El stack de `docker compose` está corriendo y ocupa ese puerto, que las pruebas del conector de PIN también usan. Detén el stack con `docker compose stop`, ejecuta `mvn verify` y vuelve a levantarlo con `docker compose up -d`.
 - **Solo quieres experimentar el job CSV.** Sigue usando [`data-migration/docker-compose.yml`](data-migration/docker-compose.yml) (MySQL aislado). El camino soportado de plataforma completa es el Compose de la raíz.
 - **`curl` falla el handshake TLS contra `bff-atm` con un certificado de cliente (`error:...SSL routines:ST_CONNECT:tlsv1 alert protocol version` o similar).** El `curl`/LibreSSL que trae macOS de fábrica tiene problemas negociando TLS con certificados de cliente P12 contra este stack. Instala una build de `curl` enlazada con OpenSSL (p. ej. `brew install curl`) o usa `openssl s_client` para depurar la conexión.
